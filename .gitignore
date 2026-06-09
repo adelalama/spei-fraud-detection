@@ -96,9 +96,8 @@ data/external/
 *.pickle
 *.joblib
 
-# BUT: keep small example/sample files. Uncomment if you want to commit a sample:
-# !data/raw/sample_transactions.csv
-# !data/processed/example_features.parquet
+#Keep reference/seed data
+!src/data_generator/data/*csv
 
 # Database files
 *.db

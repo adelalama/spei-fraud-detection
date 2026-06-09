@@ -1,0 +1,31 @@
+bank_code,bank_name,institution_type
+002,Banamex,banco_multiple
+012,BBVA,banco_multiple
+014,Santander,banco_multiple
+021,HSBC,banco_multiple
+036,Inbursa,banco_multiple
+044,Scotiabank,banco_multiple
+072,Banorte,banco_multiple
+124,Citi Bank,banco_multiple
+127,Azteca,banco_multiple
+137,BanCoppel,banco_multiple
+030,Bajio,banco_multiple
+042,Mifel,banco_multiple
+058,Banregio,banco_multiple
+059,Invex,banco_multiple
+062,Afirme,banco_multiple
+132,Multiva,banco_multiple
+143,CI Banco,banco_multiple
+145,Base,banco_multiple
+638,Nu,sofipo
+634,Fincomun,sofipo
+652,Asea,sofipo
+659,Libertad,sofipo
+656,ASP Integra OPC,sofipo
+646,STP,ifpe
+706,Arcus,ifpe
+722,Mercado Pago,ifpe
+728,Spin by OXXO,ifpe
+601,GBM,casa_bolsa
+608,Vector,casa_bolsa
+616,Finamex,casa_bolsa
