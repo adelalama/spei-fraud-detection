@@ -1,0 +1,6 @@
+from datetime import date
+
+DEFAULT_SEED = 42
+DEFAULT_N_ACCOUNTS = 60_000
+SIMULATION_START = date(2026, 1, 1)
+SIMULATION_END = date(2026, 6, 30)

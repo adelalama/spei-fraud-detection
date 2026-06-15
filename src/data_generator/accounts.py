@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 import pandas as pd
 import numpy as np
+from src.data_generator.config import DEFAULT_SEED, DEFAULT_N_ACCOUNTS, SIMULATION_START, SIMULATION_END
 from src.data_generator.institutions import institutions
 from src.data_generator.clabe import generate_clabe, validate_clabe
 
@@ -21,7 +24,11 @@ KYC_DISTRIBUTIONS = {
     'casa_bolsa' : [.0, .0, .2, .8]
 }
 
-def generate_accounts(n:int = 60_000, seed: int = 42) -> pd.DataFrame:
+MOBILE_AREA_CODES = ['55', '33', '81', '449', '477', '999', '777', '222']
+AREA_CODE_WEIGHTS = [60, 12, 10, 4, 4, 3, 3, 4]
+
+
+def generate_accounts(n: int = DEFAULT_N_ACCOUNTS, seed: int = DEFAULT_SEED) -> pd.DataFrame:
 
     rng = np.random.default_rng(seed)
 
@@ -78,6 +85,54 @@ def generate_accounts(n:int = 60_000, seed: int = 42) -> pd.DataFrame:
         if n_in_group > 0:
             kyc_tiers[mask] = rng.choice([1, 2, 3, 4], size = n_in_group, p = probs)
 
+    #time creation boundries generated from simulation_start
+
+    in_window_start = SIMULATION_START
+    in_window_end = SIMULATION_END
+    recent_start = SIMULATION_START - timedelta(days = 730)
+    recent_end = SIMULATION_START
+    mid_start = SIMULATION_START - timedelta(days = 1460)
+    mid_end = SIMULATION_START -  timedelta(days = 730)
+    old_start = SIMULATION_START - timedelta(days = 1825)
+    old_end = SIMULATION_START - timedelta(days = 1460)
+
+    date_ranges = {
+        'in_window' : (in_window_start, in_window_end),
+        'recent' : (recent_start, recent_end),
+        'mid' : (mid_start, mid_end),
+        'older_start' : (old_start, old_end),
+    }
+    bucket_names = ['in_window', 'recent', 'mid', 'older_start']
+    bucket_weights = [.3, .4, .2, .1]
+    assigned_buckets = rng.choice(bucket_names, size = n_accounts, p = bucket_weights)
+    creation_dates = np.full(n_accounts, np.datetime64('NaT') , dtype='datetime64[D]')
+    for bucket_name, (start, end) in date_ranges.items():
+        mask = assigned_buckets == bucket_name
+        n_in_bucket = mask.sum()
+        if n_in_bucket > 0:
+            days_in_range = (end-start).days
+            days_offset = rng.integers(0, days_in_range, size = n_in_bucket)
+            dates = pd.Timestamp(start) + pd.to_timedelta(days_offset, 'D')
+            creation_dates[mask] = dates
+
+    #generating phone # for each person
+
+    area_code_probs = np.array(AREA_CODE_WEIGHTS)/sum(AREA_CODE_WEIGHTS)
+    sorted_area_codes = rng.choice(MOBILE_AREA_CODES, size = total_persons, p = area_code_probs)
+
+    phone_per_person = []
+    for area_code in sorted_area_codes:
+        remaining_digits = 10 - len(area_code)
+        phone = rng.integers(0, 10**remaining_digits)
+        phone_str = str(phone).zfill(remaining_digits)
+        phone_per_person.append(area_code + phone_str)
+
+    phone_numbers = np.array(phone_per_person)[expanded_persons_id]
+
+    #add empty mule column
+
+    mule_types = np.array([None] * n_accounts, dtype = object)
+
     data = {
         "account_id" : account_ids,
         "person_id" : expanded_persons_id,
@@ -86,22 +141,32 @@ def generate_accounts(n:int = 60_000, seed: int = 42) -> pd.DataFrame:
         "account_number" : account_number_str,
         "clabe" : clabes,
         "kyc_tier" : kyc_tiers,
+        "creation_date" : creation_dates,
+        "phone_number" : phone_numbers,
+        "mule_type" : mule_types
     }
+
+    #validation
+
+    df = pd.DataFrame(data)
+
+    earliest_allowed = SIMULATION_START - timedelta(days=1825)
+    latest_allowed = SIMULATION_END
+    assert (creation_dates >= np.datetime64(earliest_allowed)).all(), "Some dates before earliest allowed"
+    assert (creation_dates <= np.datetime64(latest_allowed)).all(), "Some dates after latest allowed"
+    assert df['account_id'].is_unique, "Account IDs must be unique"
+    assert df['clabe'].is_unique, "CLABEs must be unique"
+    assert df['kyc_tier'].isin([1, 2, 3, 4]).all(), "KYC tier out of range"
+    assert df['mule_type'].isna().all()
+    assert all(len(c) == 18 for c in df['clabe']), "Some CLABEs not 18 chars"
+
     return pd.DataFrame(data)
 
 
 
 if __name__ == "__main__":
     df = generate_accounts(60_000)
-    print(df.head(20))
     print(f"Total accounts: {len(df)}")
     print(f"Total persons: {df['person_id'].nunique()}")
-    print(f"Accounts per person distribution:")
-    print(df.groupby('person_id').size().value_counts().sort_index())
-    print(df['bank_code'].value_counts(normalize=True).head(10))
-    print(df['plaza_code'].value_counts(normalize=True))
-    print(f"Unique CLABEs: {df['clabe'].nunique()} / {len(df)}")
-    assert all(len(c) == 18 for c in df['clabe']), "Some CLABEs not 18 chars"
-    print(df.merge(institutions, on='bank_code').groupby('institution_type')['kyc_tier'].value_counts(
-        normalize=True).sort_index())
-    assert df['kyc_tier'].isin([1,2,3,4]).all(), "Some tiers are not valid"
+    print(df.dtypes)
+    print(df.shape)
