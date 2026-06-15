@@ -1,31 +1,31 @@
-bank_code,bank_name,institution_type
-002,Banamex,banco_multiple
-012,BBVA,banco_multiple
-014,Santander,banco_multiple
-021,HSBC,banco_multiple
-036,Inbursa,banco_multiple
-044,Scotiabank,banco_multiple
-072,Banorte,banco_multiple
-124,Citi Bank,banco_multiple
-127,Azteca,banco_multiple
-137,BanCoppel,banco_multiple
-030,Bajio,banco_multiple
-042,Mifel,banco_multiple
-058,Banregio,banco_multiple
-059,Invex,banco_multiple
-062,Afirme,banco_multiple
-132,Multiva,banco_multiple
-143,CI Banco,banco_multiple
-145,Base,banco_multiple
-638,Nu,sofipo
-634,Fincomun,sofipo
-652,Asea,sofipo
-659,Libertad,sofipo
-656,ASP Integra OPC,sofipo
-646,STP,ifpe
-706,Arcus,ifpe
-722,Mercado Pago,ifpe
-728,Spin by OXXO,ifpe
-601,GBM,casa_bolsa
-608,Vector,casa_bolsa
-616,Finamex,casa_bolsa
+bank_code,bank_name,institution_type,weight
+002,Banamex,banco_multiple,12
+012,BBVA,banco_multiple,25
+014,Santander,banco_multiple,10
+021,HSBC,banco_multiple,5
+036,Inbursa,banco_multiple,3
+044,Scotiabank,banco_multiple,5
+072,Banorte,banco_multiple,10
+124,Citi Bank,banco_multiple,2
+127,Azteca,banco_multiple,3
+137,BanCoppel,banco_multiple,2
+030,Bajio,banco_multiple,1
+042,Mifel,banco_multiple,.5
+058,Banregio,banco_multiple,.5
+059,Invex,banco_multiple,.5
+062,Afirme,banco_multiple,.5
+132,Multiva,banco_multiple,.5
+143,CI Banco,banco_multiple,.5
+145,Base,banco_multiple,.5
+638,Nu,sofipo,8
+634,Fincomun,sofipo,.3
+652,Asea,sofipo,.2
+659,Libertad,sofipo,.3
+656,ASP Integra OPC,sofipo,.1
+646,STP,ifpe,8
+706,Arcus,ifpe,.2
+722,Mercado Pago,ifpe,3
+728,Spin by OXXO,ifpe,4
+601,GBM,casa_bolsa,.5
+608,Vector,casa_bolsa,.5
+616,Finamex,casa_bolsa,.3

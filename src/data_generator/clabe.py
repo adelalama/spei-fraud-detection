@@ -24,7 +24,7 @@ def generate_clabe(bank_code: str, plaza_code: str, account_number: str) -> str:
     clabe_base = bank_code + plaza_code + account_number
     return clabe_base+ str(clabe_check_digit(clabe_base))
 
-print(generate_clabe("032","180","00011835971"))
+#print(generate_clabe("032","180","00011835971"))
 #print(validate_clabe("032180000118359719"))
 #print(validate_clabe("032180000118359710"))
 #print(validate_clabe("0321800001183597a9"))
