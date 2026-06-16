@@ -27,6 +27,14 @@ KYC_DISTRIBUTIONS = {
 MOBILE_AREA_CODES = ['55', '33', '81', '449', '477', '999', '777', '222']
 AREA_CODE_WEIGHTS = [60, 12, 10, 4, 4, 3, 3, 4]
 
+ACCOUNT_ACTIVITY = {
+    'dormant' : 15,
+    'light' : 50,
+    'regular': 25,
+    'heavy': 8,
+    'power': 2
+}
+
 
 def generate_accounts(n: int = DEFAULT_N_ACCOUNTS, seed: int = DEFAULT_SEED) -> pd.DataFrame:
 
@@ -133,6 +141,13 @@ def generate_accounts(n: int = DEFAULT_N_ACCOUNTS, seed: int = DEFAULT_SEED) -> 
 
     mule_types = np.array([None] * n_accounts, dtype = object)
 
+    #generate account activity type
+    account_activity_codes_pool = np.array(list(ACCOUNT_ACTIVITY.keys()))
+    account_activity_weights = np.array(list(ACCOUNT_ACTIVITY.values()))
+    account_activity_probs = account_activity_weights / account_activity_weights.sum()
+    sampled_account_activity = rng.choice(account_activity_codes_pool, size = n_accounts, p = account_activity_probs)
+
+
     data = {
         "account_id" : account_ids,
         "person_id" : expanded_persons_id,
@@ -143,6 +158,7 @@ def generate_accounts(n: int = DEFAULT_N_ACCOUNTS, seed: int = DEFAULT_SEED) -> 
         "kyc_tier" : kyc_tiers,
         "creation_date" : creation_dates,
         "phone_number" : phone_numbers,
+        "activity_segment" : sampled_account_activity,
         "mule_type" : mule_types
     }
 
