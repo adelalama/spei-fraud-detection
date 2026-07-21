@@ -22,6 +22,14 @@ NETWORK_SIZES = {
     'power': (40, 100),
 }
 
+AMOUNT_REGIMES = {
+    'micro':         {'weight': 30, 'mu': 4.4,  'sigma': 0.9},
+    'small_retail':  {'weight': 40, 'mu': 7.4,  'sigma': 0.75},
+    'medium_retail': {'weight': 24, 'mu': 8.7,  'sigma': 0.5},
+    'large':         {'weight': 4,  'mu': 10.1, 'sigma': 1.0},
+    'high_value':    {'weight': 2,  'mu': 12.7, 'sigma': 1.2},
+}
+
 def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     rng = np.random.default_rng(seed)
 
@@ -43,7 +51,10 @@ def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     #receivers
     receiver_ids = assign_transaction_receiver(sender_ids, beneficiary_networks, accounts_df, rng)
 
-    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids)
+    #amounts
+    amounts = sample_amounts(len(sender_ids), rng)
+
+    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids, amounts)
 
 
 #function to build network of recurring transactions for each account
@@ -107,13 +118,33 @@ def assign_transaction_receiver(sender_ids, beneficiary_networks, accounts_df, r
 
     return np.array(receiver_ids)
 
+#sampling transactions to amount regimes
+
+def sample_amounts(n_transactions, rng):
+    regime_names = list(AMOUNT_REGIMES.keys())
+    regime_weights = np.array([regime['weight'] for regime in AMOUNT_REGIMES.values()])
+    regime_probs = regime_weights / regime_weights.sum()
+    assigned_regimes = rng.choice(regime_names, p = regime_probs, size = n_transactions)
+
+    amounts = np.empty(n_transactions)
+    for regime_name, params in AMOUNT_REGIMES.items():
+        mask = assigned_regimes == regime_name
+        n_in_regime = mask.sum()
+        if n_in_regime > 0:
+            amounts[mask] = rng.lognormal(mean = params['mu'], sigma= params['sigma'], size = n_in_regime )
+    amounts_rounded = np.round(amounts, 2)
+    amounts_decimal = [Decimal(str(x)) for x in amounts_rounded]
+    assert len(amounts_decimal) == n_transactions
+    assert all(a > Decimal('0') for a in amounts_decimal)
+    return amounts_decimal
 
 if __name__ == "__main__":
     from src.data_generator.accounts import generate_accounts
     rng = np.random.default_rng(DEFAULT_SEED)
 
     accounts_df = generate_accounts(10_000)
-    n_transactions, sender_ids, networks, receiver_ids = generate_transactions(accounts_df)
+    n_transactions, sender_ids, networks, receiver_ids, amounts = generate_transactions(accounts_df)
+
 
     print(f"Generated {n_transactions.sum():,} transactions")
     print(f"Mean per account: {n_transactions.mean():.1f}")
@@ -121,3 +152,6 @@ if __name__ == "__main__":
 
     assert len(receiver_ids) == len(sender_ids)
     assert (sender_ids != receiver_ids).all()
+
+
+
