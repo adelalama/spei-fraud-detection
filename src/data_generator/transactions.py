@@ -31,6 +31,12 @@ AMOUNT_REGIMES = {
 }
 
 def generate_transactions(accounts_df, seed = DEFAULT_SEED):
+    """
+    Generates transactions dataset from accounts_df.
+
+    Returns tuple with final df elements
+    """
+
     rng = np.random.default_rng(seed)
 
     #transaction counts per account
@@ -59,6 +65,11 @@ def generate_transactions(accounts_df, seed = DEFAULT_SEED):
 
 #function to build network of recurring transactions for each account
 def build_beneficiary_networks(accounts_df, rng):
+    """
+    Build beneficiary networks for each account with a 70/30 same segment bias
+
+    Returns dictionary mapping account_id to list of beneficiary networks account_id
+    """
     accounts_by_segment = accounts_df.groupby('activity_segment')['account_id'].apply(list).to_dict()
     all_accounts_ids = accounts_df["account_id"].tolist()
     beneficiary_networks = {}
@@ -81,9 +92,17 @@ def build_beneficiary_networks(accounts_df, rng):
 
         beneficiary_networks[account_id] = combined
 
+    for aid, network in beneficiary_networks.items():
+        assert len(network) > 0
+        assert aid not in network
+
     return beneficiary_networks
 
 def sample_new_beneficiary(sender_id, sender_segment, existing_network, accounts_by_segment, all_account_ids, rng):
+    """Samples a new beneficiary for a sender, excludes existing network and self
+
+     Returns one account_id
+     """
     #same segment
     if rng.random()<.7:
         candidates = accounts_by_segment[sender_segment]
@@ -96,7 +115,10 @@ def sample_new_beneficiary(sender_id, sender_segment, existing_network, accounts
     return rng.choice(eligible)
 
 def assign_transaction_receiver(sender_ids, beneficiary_networks, accounts_df, rng):
+    """For each transaction, assigns a receiver account. 90% from senders network, 10% new beneficiary that is added to network
 
+    Returns an array of receiver ids, equivalent to sender_ids.
+    """
     all_account_ids = accounts_df["account_id"].tolist()
     accounts_by_segment = accounts_df.groupby('activity_segment')['account_id'].apply(list).to_dict()
     segment_lookup = dict(zip(accounts_df['account_id'], accounts_df['activity_segment']))
@@ -116,11 +138,18 @@ def assign_transaction_receiver(sender_ids, beneficiary_networks, accounts_df, r
             receiver = rng.choice(beneficiary_networks[sender_id])
             receiver_ids.append(receiver)
 
+    assert len(receiver_ids) == len(sender_ids)
+
     return np.array(receiver_ids)
 
 #sampling transactions to amount regimes
 
 def sample_amounts(n_transactions, rng):
+    """
+    Sample transaction amounts according to the lognormal distribution across the 5 different regimes.
+
+    Returns list of amounts, corresponding to number of transactions.
+    """
     regime_names = list(AMOUNT_REGIMES.keys())
     regime_weights = np.array([regime['weight'] for regime in AMOUNT_REGIMES.values()])
     regime_probs = regime_weights / regime_weights.sum()
