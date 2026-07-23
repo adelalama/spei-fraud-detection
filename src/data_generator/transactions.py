@@ -30,6 +30,44 @@ AMOUNT_REGIMES = {
     'high_value':    {'weight': 2,  'mu': 12.7, 'sigma': 1.2},
 }
 
+DAY_OF_WEEK_WEIGHTS = {
+    0: 5,
+    1: 5,
+    2: 5,
+    3: 5,
+    4: 5,
+    5: 3,
+    6: 2,
+}
+
+HOUR_WEIGHTS = {
+    0: 0.5,
+    1: 0.3,
+    2: 0.2,
+    3: 0.2,
+    4: 0.3,
+    5: 0.7,
+    6: 1.5,
+    7: 3.0,
+    8: 6.0,
+    9: 8.0,
+    10: 9.0,
+    11: 8.0,
+    12: 5.0,
+    13: 4.5,
+    14: 7.0,
+    15: 8.0,
+    16: 7.5,
+    17: 6.5,
+    18: 5.0,
+    19: 4.5,
+    20: 4.0,
+    21: 3.0,
+    22: 2.0,
+    23: 1.0,
+}
+
+
 def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     """
     Generates transactions dataset from accounts_df.
@@ -60,7 +98,10 @@ def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     #amounts
     amounts = sample_amounts(len(sender_ids), rng)
 
-    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids, amounts)
+    #timestamps
+    timestamps = sample_timestamps(len(sender_ids), rng)
+
+    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids, amounts, timestamps)
 
 
 #function to build network of recurring transactions for each account
@@ -89,6 +130,13 @@ def build_beneficiary_networks(accounts_df, rng):
         combined = list(same_segment_sample) + list(any_segment_sample)
         if account_id in combined:
             combined = [i for i in combined if i != account_id]
+
+        #edge case for small networks if self was only sample
+        if len(combined) == 0:
+            candidate = account_id
+            while candidate == account_id:
+                candidate = rng.choice(all_accounts_ids)
+            combined = [int(candidate)]
 
         beneficiary_networks[account_id] = combined
 
@@ -167,12 +215,56 @@ def sample_amounts(n_transactions, rng):
     assert all(a > Decimal('0') for a in amounts_decimal)
     return amounts_decimal
 
+#adding sampled timestamps to each transaction
+def sample_timestamps(n_transactions, rng):
+    """
+    Sample transaction timestamps for day of month, day of week and hour patterns according to probable account activity
+
+    Returns DateTimeIndex of length equal to n_transactions.
+    """
+
+    dates = pd.date_range(SIMULATION_START, SIMULATION_END, freq='D')
+    dow_series = pd.Series(dates.dayofweek, index=dates)
+
+    dow_weights = dow_series.map(DAY_OF_WEEK_WEIGHTS)
+
+    is_15th = dates.day == 15
+
+    next_day = dates + pd.Timedelta(days=1)
+    is_last_day = next_day.month != dates.month
+
+    is_spike_day = is_15th | is_last_day
+    dom_multipliers = np.where(is_spike_day, 2.0, 1.0)
+
+    combined_weights = dow_weights * dom_multipliers
+
+    date_probs = combined_weights / combined_weights.sum()
+
+    sampled_dates = rng.choice(dates, size=n_transactions, p=date_probs)
+
+    # hour sampling
+    hour_weights_array = np.array([HOUR_WEIGHTS[h] for h in range(24)])
+    hour_probs = hour_weights_array / hour_weights_array.sum()
+    sampled_hours = rng.choice(24, size=n_transactions, p=hour_probs)
+
+    # second/minute sampling
+    sampled_minutes = rng.integers(0, 60, size=n_transactions)
+    sampled_seconds = rng.integers(0, 60, size=n_transactions)
+
+    timestamps = (pd.to_datetime(sampled_dates) + pd.to_timedelta(sampled_hours, unit='h') + pd.to_timedelta(sampled_minutes, unit='m')
+                  + pd.to_timedelta(sampled_seconds, unit='s'))
+
+    assert len(timestamps) == n_transactions
+    return timestamps
+
+
+
 if __name__ == "__main__":
     from src.data_generator.accounts import generate_accounts
     rng = np.random.default_rng(DEFAULT_SEED)
 
     accounts_df = generate_accounts(10_000)
-    n_transactions, sender_ids, networks, receiver_ids, amounts = generate_transactions(accounts_df)
+    n_transactions, sender_ids, networks, receiver_ids, amounts, timestamps = generate_transactions(accounts_df)
 
 
     print(f"Generated {n_transactions.sum():,} transactions")
@@ -181,6 +273,18 @@ if __name__ == "__main__":
 
     assert len(receiver_ids) == len(sender_ids)
     assert (sender_ids != receiver_ids).all()
+
+    print(f"Sample timestamps (first 5): {list(timestamps[:5])}")
+    print(f"Time range: {timestamps.min()} to {timestamps.max()}")
+
+    hour_counts = pd.Series(timestamps).dt.hour.value_counts().sort_index()
+    print(f"\nHour distribution:\n{hour_counts}")
+
+    dow_counts = pd.Series(timestamps).dt.dayofweek.value_counts().sort_index()
+    print(f"\nDay-of-week counts (Mon=0):\n{dow_counts}")
+
+    day_counts = pd.Series(timestamps).dt.day.value_counts().sort_index()
+    print(f"\nDay-of-month counts (spikes at 15 + last day):\n{day_counts}")
 
 
 
