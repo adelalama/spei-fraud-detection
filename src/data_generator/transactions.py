@@ -67,6 +67,50 @@ HOUR_WEIGHTS = {
     23: 1.0,
 }
 
+LEGITIMATE_CONCEPTS = {
+    "": 30,
+
+    "transferencia": 6,
+    "pago": 5,
+    "envío": 3,
+    "depósito": 2,
+    "envio": 2,
+
+    "renta": 5,
+    "luz CFE": 2,
+    "agua": 1.5,
+    "gas": 1.5,
+    "internet": 2,
+    "teléfono": 1.5,
+    "Netflix": 1,
+    "colegiatura": 2,
+    "celular": 1.5,
+
+    "comida": 3,
+    "cena": 2,
+    "café": 1,
+    "regalo": 2,
+    "mamá": 1.5,
+    "papá": 1.5,
+    "hermano": 1,
+    "familia": 1,
+    "amigos": 1,
+
+    "factura": 3,
+    "servicios": 2,
+    "honorarios": 2,
+    "trabajo": 1.5,
+    "consulta": 1,
+    "proveedor": 0.5,
+
+    "nómina": 3,
+    "préstamo": 2,
+    "ahorro": 1.5,
+    "viaje": 1,
+    "abono": 1.5,
+    "reembolso": 1,
+}
+
 
 def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     """
@@ -101,7 +145,10 @@ def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     #timestamps
     timestamps = sample_timestamps(len(sender_ids), rng)
 
-    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids, amounts, timestamps)
+    #concept
+    concepts = sample_concept_pago(len(sender_ids), rng)
+
+    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids, amounts, timestamps, concepts)
 
 
 #function to build network of recurring transactions for each account
@@ -258,13 +305,26 @@ def sample_timestamps(n_transactions, rng):
     return timestamps
 
 
+#sample concepto pago for all transactions
+def sample_concept_pago(n_transactions, rng):
+    """ Sample transaction concepto pago strings from legitimate_concepts dictionary
+
+    Returns array of strings with n_transactions length. 30% left blank
+    """
+    concepts_pool = list(LEGITIMATE_CONCEPTS.keys())
+    weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
+    probs = weights / weights.sum()
+    concepts = rng.choice(concepts_pool, size=n_transactions, p=probs)
+
+    return concepts
+
 
 if __name__ == "__main__":
     from src.data_generator.accounts import generate_accounts
     rng = np.random.default_rng(DEFAULT_SEED)
 
     accounts_df = generate_accounts(10_000)
-    n_transactions, sender_ids, networks, receiver_ids, amounts, timestamps = generate_transactions(accounts_df)
+    n_transactions, sender_ids, networks, receiver_ids, amounts, timestamps, concepts = generate_transactions(accounts_df)
 
 
     print(f"Generated {n_transactions.sum():,} transactions")
@@ -274,17 +334,7 @@ if __name__ == "__main__":
     assert len(receiver_ids) == len(sender_ids)
     assert (sender_ids != receiver_ids).all()
 
-    print(f"Sample timestamps (first 5): {list(timestamps[:5])}")
-    print(f"Time range: {timestamps.min()} to {timestamps.max()}")
 
-    hour_counts = pd.Series(timestamps).dt.hour.value_counts().sort_index()
-    print(f"\nHour distribution:\n{hour_counts}")
-
-    dow_counts = pd.Series(timestamps).dt.dayofweek.value_counts().sort_index()
-    print(f"\nDay-of-week counts (Mon=0):\n{dow_counts}")
-
-    day_counts = pd.Series(timestamps).dt.day.value_counts().sort_index()
-    print(f"\nDay-of-month counts (spikes at 15 + last day):\n{day_counts}")
 
 
 
