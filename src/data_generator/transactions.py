@@ -148,7 +148,70 @@ def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     #concept
     concepts = sample_concept_pago(len(sender_ids), rng)
 
-    return (n_transactions, sender_ids, beneficiary_networks, receiver_ids, amounts, timestamps, concepts)
+    #create transactions_df
+    transactions_df = pd.DataFrame({
+        "sender_account_id": sender_ids,
+        "receiver_account_id": receiver_ids,
+        "amount": amounts,
+        "transaction_date": timestamps,
+        "concept_pago": concepts,
+    })
+
+    transactions_df = transactions_df.merge(accounts_df[['account_id', 'clabe']].rename(columns={'account_id': 'sender_account_id', 'clabe':'sender_clabe'}),
+                                            on='sender_account_id', how = 'left')
+    transactions_df = transactions_df.merge(accounts_df[['account_id', 'clabe']].rename(columns={'account_id': 'receiver_account_id', 'clabe':'receiver_clabe'}),
+                                            on='receiver_account_id', how='left')
+
+    #adding additional columns
+    transactions_df['transaction_id'] = range(len(transactions_df))
+    transactions_df['status'] = 'Liquidada'
+    transactions_df['is_fraud'] = False
+    transactions_df['fraud_typology'] = None
+    transactions_df['fraud_event_id'] = None
+
+    #ordering columns
+    column_order = [
+        'transaction_id', 'sender_account_id', 'sender_clabe', 'receiver_account_id', 'receiver_clabe',
+        'amount','transaction_date', 'concept_pago','status','is_fraud','fraud_typology','fraud_event_id'
+    ]
+
+    transactions_df = transactions_df[column_order]
+
+    #running validator
+    validate_transactions(transactions_df, accounts_df)
+
+    return transactions_df
+
+def validate_transactions(transactions_df, accounts_df):
+    """Asserts validating transactions dataframe was generated properly"""
+
+    assert len(transactions_df) > 0
+
+    expected_columns = [
+        'transaction_id', 'sender_account_id', 'sender_clabe', 'receiver_account_id', 'receiver_clabe',
+        'amount','transaction_date', 'concept_pago','status','is_fraud','fraud_typology','fraud_event_id'
+    ]
+    assert list(transactions_df.columns) == expected_columns
+
+    valid_ids = set(accounts_df['account_id'])
+    assert transactions_df['sender_account_id'].isin(valid_ids).all()
+    assert transactions_df['receiver_account_id'].isin(valid_ids).all()
+
+    assert (transactions_df['sender_account_id'] != transactions_df['receiver_account_id']).all()
+
+    from src.data_generator.clabe import validate_clabe
+    assert transactions_df['sender_clabe'].apply(validate_clabe).all()
+    assert transactions_df['receiver_clabe'].apply(validate_clabe).all()
+
+    assert not transactions_df['is_fraud'].any()
+    assert transactions_df['fraud_typology'].isna().all()
+    assert transactions_df['fraud_event_id'].isna().all()
+
+    assert (transactions_df['amount']> Decimal('0')).all()
+
+    assert (transactions_df['status'] == 'Liquidada').all()
+
+
 
 
 #function to build network of recurring transactions for each account
@@ -321,18 +384,11 @@ def sample_concept_pago(n_transactions, rng):
 
 if __name__ == "__main__":
     from src.data_generator.accounts import generate_accounts
-    rng = np.random.default_rng(DEFAULT_SEED)
-
     accounts_df = generate_accounts(10_000)
-    n_transactions, sender_ids, networks, receiver_ids, amounts, timestamps, concepts = generate_transactions(accounts_df)
+    transactions_df = generate_transactions(accounts_df)
 
 
-    print(f"Generated {n_transactions.sum():,} transactions")
-    print(f"Mean per account: {n_transactions.mean():.1f}")
 
-
-    assert len(receiver_ids) == len(sender_ids)
-    assert (sender_ids != receiver_ids).all()
 
 
 
