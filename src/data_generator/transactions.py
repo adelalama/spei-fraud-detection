@@ -233,6 +233,11 @@ def build_beneficiary_networks(accounts_df, rng):
         n_any = network_size - n_same
 
         same_segment_pool = accounts_by_segment[segment]
+
+        # fix for sampling with smaller pool than 10,000
+        n_same = min(n_same, len(same_segment_pool))
+        n_any = min(n_any, len(all_accounts_ids))
+
         same_segment_sample = rng.choice(same_segment_pool, size= n_same, replace=False)
 
         any_segment_sample = rng.choice(all_accounts_ids, size = n_any, replace=False )
