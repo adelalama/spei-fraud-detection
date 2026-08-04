@@ -43,6 +43,22 @@ APP_FRAUD_VOCAB = {
 
 APP_AMOUNT_WEIGHTS = {'medium_retail': 60, 'large':30, 'small_retail':10}
 
+BUSINESS_AMOUNT_WEIGHTS = {'small_retail': 70, 'micro': 20, 'medium_retail': 10}
+
+BUSINESS_IMPERSONATION_VOCAB = {
+    "membresia premium": 12,
+    "renovacion anual": 10,
+    "comision apertura": 10,
+    "servicio anual": 10,
+    "factura pendiente": 12,
+    "cargo mensual": 8,
+    "cuota inscripcion": 8,
+    "servicios profesionales": 6,
+    "actualizacion cuenta": 6,
+    "verificacion": 8,
+    "": 10,
+}
+
 
 def select_mule_accounts(accounts_df, rng):
 
@@ -136,6 +152,7 @@ def sample_fraud_timestamps(n, hour_multipliers, rng):
 
 def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rng):
     """Generate APP fraud transactions"""
+
     sender_counts = transactions_df.groupby('sender_account_id').size()
     qualifying_senders = sender_counts[sender_counts >= 10].index
 
@@ -151,24 +168,24 @@ def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rn
     timestamps = sample_fraud_timestamps(n_to_sample, {}, rng)
 
     #concepto_pago 60% fraud-like 40% legit
-    fraud_vocab_use = rng.random(n_to_sample) < .6
-    fraud_vocab_names = list(APP_FRAUD_VOCAB.keys())
-    fraud_vocab_weights = np.array(list(APP_FRAUD_VOCAB.values()))
+    app_vocab_use = rng.random(n_to_sample) < .6
+    app_vocab_names = list(APP_FRAUD_VOCAB.keys())
+    app_vocab_weights = np.array(list(APP_FRAUD_VOCAB.values()))
 
-    n_fraud_concepts = fraud_vocab_use.sum()
-    concept_probs = fraud_vocab_weights / fraud_vocab_weights.sum()
-    assign_fraud_concept = rng.choice(fraud_vocab_names, p=concept_probs, size=n_fraud_concepts)
+    n_fraud_concepts = app_vocab_use.sum()
+    concept_probs = app_vocab_weights / app_vocab_weights.sum()
+    assign_fraud_concept = rng.choice(app_vocab_names, p=concept_probs, size=n_fraud_concepts)
 
     legit_names = list(LEGITIMATE_CONCEPTS.keys())
     legit_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
     legit_probs = legit_weights / legit_weights.sum()
 
-    n_legit_concepts = (~fraud_vocab_use).sum()
+    n_legit_concepts = (~app_vocab_use).sum()
     assign_legit_concepts = rng.choice(legit_names, p = legit_probs,size = n_legit_concepts)
 
     concepts = np.empty(n_to_sample, dtype = object)
-    concepts[fraud_vocab_use] = assign_fraud_concept
-    concepts[~fraud_vocab_use] = assign_legit_concepts
+    concepts[app_vocab_use] = assign_fraud_concept
+    concepts[~app_vocab_use] = assign_legit_concepts
 
     fraud_df = pd.DataFrame({
         "sender_account_id": victim_ids,
@@ -198,6 +215,66 @@ def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rn
     return fraud_df
 
 
+def generate_business_impersonation(accounts_df, transactions_df, mule_pool, target_count, rng):
+    """ Generate business impersonation fraud transactions"""
+
+    sender_counts = transactions_df.groupby('sender_account_id').size()
+    qualifying_senders = sender_counts[sender_counts >= 10].index
+
+    n_to_sample = min(target_count, len(qualifying_senders))
+    victim_ids = rng.choice(qualifying_senders, size=n_to_sample, replace=False)
+
+    receiver_ids = rng.choice(mule_pool, size=n_to_sample)
+
+    biz_amounts = sample_fraud_amounts(n_to_sample, BUSINESS_AMOUNT_WEIGHTS, rng)
+
+    timestamps = sample_fraud_timestamps(n_to_sample, BUSINESS_HOUR_MULTIPLIERS, rng)
+
+    biz_vocab_use = rng.random(n_to_sample) < .8
+    biz_vocab_names = list(BUSINESS_IMPERSONATION_VOCAB.keys())
+    biz_vocab_weights = np.array(list(BUSINESS_IMPERSONATION_VOCAB.values()))
+    biz_probs = biz_vocab_weights / biz_vocab_weights.sum()
+
+    n_biz_concepts = biz_vocab_use.sum()
+    assigned_biz_concepts = rng.choice(biz_vocab_names, size = n_biz_concepts, p = biz_probs)
+
+    legit_names = list(LEGITIMATE_CONCEPTS.keys())
+    legit_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
+    legit_probs = legit_weights / legit_weights.sum()
+
+    n_legit_concepts = (~biz_vocab_use).sum()
+    assigned_legit_concepts = rng.choice(legit_names, size = n_legit_concepts, p = legit_probs)
+
+    concepts = np.empty(n_to_sample, dtype = object)
+    concepts[biz_vocab_use] = assigned_biz_concepts
+    concepts[~biz_vocab_use] = assigned_legit_concepts
+
+    fraud_df = pd.DataFrame({
+        "sender_account_id": victim_ids,
+        "receiver_account_id": receiver_ids,
+        "amount": biz_amounts,
+        "transaction_date": timestamps,
+        "concept_pago": concepts,
+        "is_fraud": True,
+        "fraud_typology": 'business_impersonation',
+        "status": "Liquidada",
+        "fraud_event_id": None
+    })
+
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
+        on='sender_account_id',
+        how='left'
+    )
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
+        on='receiver_account_id',
+        how='left'
+    )
+
+    return fraud_df
 
 
 
@@ -208,7 +285,11 @@ if __name__ == '__main__':
     rng = np.random.default_rng(DEFAULT_SEED)
 
     mule_pools = select_mule_accounts(accounts_df, rng)
-    app_fraud_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], 1130, rng)
 
+    app_fraud_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], 1130, rng)
     print(f"Generated {len(app_fraud_df)} APP fraud transactions")
+
+    business_fraud_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], 260, rng)
+    print(f"Generated {len(business_fraud_df)} business impersonation transactions")
+
 
