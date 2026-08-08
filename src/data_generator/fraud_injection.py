@@ -59,6 +59,18 @@ BUSINESS_IMPERSONATION_VOCAB = {
     "": 10,
 }
 
+ATO_MIN_VICTIM_AGE_DAYS = 365
+
+ATO_AMOUNT_WEIGHTS = {'large': 50, 'medium_retail': 40, 'high_value': 10}
+
+ATO_TRANSACTIONS_PER_EVENT_PROBS = [.7, .25, .05]
+
+ATO_GENERIC_CONCEPTS = {
+    'transferencia': 40,
+    'pago': 30,
+    'envio': 20,
+    'deposito': 10
+}
 
 def select_mule_accounts(accounts_df, rng):
 
@@ -277,6 +289,82 @@ def generate_business_impersonation(accounts_df, transactions_df, mule_pool, tar
     return fraud_df
 
 
+def generate_ato(accounts_df, transactions_df, mule_pool, target_count, rng):
+    """Generate ATO fraud transactions"""
+
+    one_year_ago = pd.Timestamp(SIMULATION_START - timedelta(days = ATO_MIN_VICTIM_AGE_DAYS))
+    established_ids = accounts_df[accounts_df['creation_date'] <= one_year_ago]
+
+    sender_count = transactions_df.groupby('sender_account_id').size()
+    active_senders = sender_count[sender_count >= 15].index
+
+    qualifying_victims = established_ids[established_ids['account_id'].isin(active_senders)]['account_id']
+
+    n_events = int(target_count / 1.35)
+    n_to_sample = min(n_events, len(qualifying_victims))
+    victim_ids = rng.choice(qualifying_victims.values, size = n_to_sample, replace=False)
+
+    n_transactions_per_event = rng.choice([1, 2, 3], size = n_to_sample, p = ATO_TRANSACTIONS_PER_EVENT_PROBS)
+
+    sender_ids_expanded = np.repeat(victim_ids, n_transactions_per_event)
+    event_ids_expanded = np.repeat(np.arange(n_to_sample), n_transactions_per_event)
+
+    n_total_transactions = len(sender_ids_expanded)
+    receiver_ids = rng.choice(mule_pool, size = n_total_transactions)
+
+    ato_amounts = sample_fraud_amounts(n_total_transactions, ATO_AMOUNT_WEIGHTS, rng)
+
+    timestamps = sample_fraud_timestamps(n_total_transactions, ATO_HOUR_MULTIPLIERS, rng)
+
+
+    roll = rng.random(n_total_transactions)
+    generic = (roll >= .8) & (roll < .95)
+    fraud = roll >= .95
+
+    concepts = np.full(n_total_transactions, "", dtype = object)
+
+    n_generic = generic.sum()
+    if n_generic > 0:
+        generic_names = list(ATO_GENERIC_CONCEPTS.keys())
+        generic_weights = np.array(list(ATO_GENERIC_CONCEPTS.values()))
+        generic_probs = generic_weights / generic_weights.sum()
+        concepts[generic] = rng.choice(generic_names, size = n_generic, p = generic_probs)
+
+    n_fraud = fraud.sum()
+    if n_fraud > 0:
+        fraud_names = list(APP_FRAUD_VOCAB.keys())
+        fraud_weights = np.array(list(APP_FRAUD_VOCAB.values()))
+        fraud_probs = fraud_weights/ fraud_weights.sum()
+        concepts[fraud] = rng.choice(fraud_names, size = n_fraud, p = fraud_probs)
+
+    fraud_df = pd.DataFrame({
+        "sender_account_id": sender_ids_expanded,
+        "receiver_account_id": receiver_ids,
+        "amount": ato_amounts,
+        "transaction_date": timestamps,
+        "concept_pago": concepts,
+        "is_fraud": True,
+        "fraud_typology": 'ato',
+        "status": "Liquidada",
+        "fraud_event_id": event_ids_expanded
+    })
+
+
+
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
+        on='sender_account_id',
+        how='left'
+    )
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
+        on='receiver_account_id',
+        how='left'
+    )
+
+    return fraud_df
 
 if __name__ == '__main__':
 
@@ -292,4 +380,6 @@ if __name__ == '__main__':
     business_fraud_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], 260, rng)
     print(f"Generated {len(business_fraud_df)} business impersonation transactions")
 
+    ato_fraud_df = generate_ato(accounts_df, transactions_df, mule_pools['ato'], 870, rng)
+    print(f"Generated {len(ato_fraud_df)} ATO fraud transactions")
 
