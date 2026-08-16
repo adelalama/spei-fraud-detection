@@ -72,6 +72,18 @@ ATO_GENERIC_CONCEPTS = {
     'deposito': 10
 }
 
+SMURFING_EVENT_SIZE_RANGE = (4, 8)
+
+SMURFING_AMOUNT_MODE_PROBS = [.8, .2]
+
+SMURFING_THRESHOLD_RANGE = (11_000, 13_199)
+SMURFING_MIXED_RANGE = (5_000, 10_999)
+
+SMURFING_RECEIVER_COUNT_PROBS = [0.60, 0.30, 0.10]
+
+SMURFING_TIMING_PROBS = [0.60, 0.30, 0.10]
+SMURFING_TIMING_WINDOWS_HOURS = [24, 72, 96]
+
 def select_mule_accounts(accounts_df, rng):
 
     scale_factor = len(accounts_df)/ 10_000
@@ -366,6 +378,131 @@ def generate_ato(accounts_df, transactions_df, mule_pool, target_count, rng):
 
     return fraud_df
 
+def generate_smurfing(accounts_df, transactions_df, mule_pool, target_count, rng):
+    """Generate smurfing fraud transactions"""
+
+    sender_counts = transactions_df.groupby('sender_account_id').size()
+    active_senders = sender_counts[sender_counts >= 15].index
+
+    n_events = int(target_count / 6) # 6 = avg event size
+    n_to_sample = min(n_events, len(active_senders))
+
+    perpetrator_ids = rng.choice(active_senders, size = n_to_sample, replace = False)
+
+    min_size, max_size = SMURFING_EVENT_SIZE_RANGE
+    event_sizes = rng.integers(min_size, max_size + 1, size = n_to_sample)
+
+    sender_ids_expanded = np.repeat(perpetrator_ids, event_sizes)
+    event_ids = np.repeat(np.arange(n_to_sample), event_sizes)
+
+    receivers_per_event = rng.choice([1, 2, 3], size= n_to_sample, p = SMURFING_RECEIVER_COUNT_PROBS)
+
+    #multi-receiver assignments per event
+    receiver_lists = []
+    for i in range(n_events):
+        n_receivers = receivers_per_event[i]
+        n_transactions_this_event = event_sizes[i]
+
+        event_receivers = rng.choice(mule_pool, size = n_receivers, replace = False)
+
+        txn_receivers = rng.choice(event_receivers, size = n_transactions_this_event)
+        receiver_lists.append(txn_receivers)
+
+    receiver_ids = np.concatenate(receiver_lists)
+
+    #amount sampling
+    n_total_transactions = len(sender_ids_expanded)
+
+    mode_roll = rng.random(n_total_transactions)
+    is_threshold_mode = mode_roll < .8
+
+    amounts_float = np.empty(n_total_transactions)
+
+    n_threshold = is_threshold_mode.sum()
+    if n_threshold > 0:
+        low, high = SMURFING_THRESHOLD_RANGE
+        amounts_float[is_threshold_mode] = rng.uniform(low, high +1, size = n_threshold)
+
+    n_mixed = (~is_threshold_mode).sum()
+    if n_mixed > 0:
+        low, high = SMURFING_MIXED_RANGE
+        amounts_float[~is_threshold_mode] = rng.uniform(low, high +1, size = n_mixed)
+
+    amounts_rounded = np.round(amounts_float, 2)
+    amounts = [Decimal(str(x)) for x in amounts_rounded]
+
+    #transactions burst timing
+    window_hours_per_event = rng.choice(SMURFING_TIMING_WINDOWS_HOURS, size = n_to_sample, p = SMURFING_TIMING_PROBS)
+
+    sim_start_ts = pd.Timestamp(SIMULATION_START)
+    sim_end_ts = pd.Timestamp(SIMULATION_END) + pd.Timedelta(days=1)
+
+    sim_end_seconds = (sim_end_ts - sim_start_ts).total_seconds()
+    window_seconds_per_event = window_hours_per_event *3600
+
+    latest_start_per_event = sim_end_seconds - window_seconds_per_event
+
+    burst_start = rng.uniform(0, latest_start_per_event, size = n_to_sample)
+
+    burst_start_expanded = np.repeat(burst_start, event_sizes)
+    window_expanded = np.repeat(window_seconds_per_event, event_sizes)
+
+    offset_seconds = rng.uniform(0, window_expanded, size = n_total_transactions)
+
+    timestamps_seconds = burst_start_expanded + offset_seconds
+
+    timestamps = sim_start_ts + pd.to_timedelta(timestamps_seconds, unit = 's')
+
+    roll = rng.random(n_total_transactions)
+    is_generic = (roll >= .6) & (roll < .9)
+    is_varied = roll >= .9
+
+    concepts = np.full(n_total_transactions, "", dtype = object)
+
+    n_generic = is_generic.sum()
+    if n_generic > 0:
+        generic_names = list(ATO_GENERIC_CONCEPTS.keys())
+        generic_weights = np.array(list(ATO_GENERIC_CONCEPTS.values()))
+        generic_probs = generic_weights / generic_weights.sum()
+        concepts[is_generic] = rng.choice(generic_names, size = n_generic, p = generic_probs)
+
+    n_varied = is_varied.sum()
+    if n_varied > 0:
+        varied_names = list(LEGITIMATE_CONCEPTS.keys())
+        varied_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
+        varied_probs = varied_weights / varied_weights.sum()
+        concepts[is_varied] = rng.choice(varied_names, size = n_varied, p = varied_probs)
+
+    fraud_df = pd.DataFrame({
+        "sender_account_id": sender_ids_expanded,
+        "receiver_account_id": receiver_ids,
+        "amount": amounts,
+        "transaction_date": timestamps,
+        "concept_pago": concepts,
+        "is_fraud": True,
+        "fraud_typology": 'smurfing',
+        "status": "Liquidada",
+        "fraud_event_id": event_ids
+    })
+
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
+        on='sender_account_id',
+        how='left'
+    )
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
+        on='receiver_account_id',
+        how='left'
+    )
+
+    return fraud_df
+
+
+
+
 if __name__ == '__main__':
 
     accounts_df = generate_accounts(10_000)
@@ -383,3 +520,6 @@ if __name__ == '__main__':
     ato_fraud_df = generate_ato(accounts_df, transactions_df, mule_pools['ato'], 870, rng)
     print(f"Generated {len(ato_fraud_df)} ATO fraud transactions")
 
+
+    smurfing_df = generate_smurfing(accounts_df, transactions_df, mule_pools['shared'], 325, rng)
+    print(f"Generated {len(smurfing_df)} smurfing transactions")

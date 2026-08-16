@@ -76,7 +76,7 @@ profile_default/
 ipython_config.py
 
 # ==============================================================================
-# Data files (project-specific — review before committing)
+# Data files
 # ==============================================================================
 # By default, ignore raw and processed data folders. You can either:
 #   (a) keep this as-is and document the data generation process in the README, or
@@ -85,7 +85,7 @@ data/raw/
 data/processed/
 data/interim/
 data/external/
-
+notebooks/
 # Common large data formats
 *.csv
 *.parquet
