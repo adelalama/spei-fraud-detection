@@ -2,6 +2,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from decimal import Decimal
+
+from numpy.ma.core import concatenate
+
 from config import SIMULATION_START, SIMULATION_END, DEFAULT_SEED
 from src.data_generator.transactions import LEGITIMATE_CONCEPTS, generate_transactions
 from transactions import AMOUNT_REGIMES, HOUR_WEIGHTS, DAY_OF_WEEK_WEIGHTS
@@ -83,6 +86,16 @@ SMURFING_RECEIVER_COUNT_PROBS = [0.60, 0.30, 0.10]
 
 SMURFING_TIMING_PROBS = [0.60, 0.30, 0.10]
 SMURFING_TIMING_WINDOWS_HOURS = [24, 72, 96]
+
+MULE_AMOUNT_WEIGHTS = {
+    'medium_retail': 40,
+    'small_retail': 30,
+    'large': 20,
+    'micro': 10,
+}
+
+MULE_TO_MULE_SPLIT = 0.50
+MULE_CONCEPT_BLANK_RATE = 0.85
 
 def select_mule_accounts(accounts_df, rng):
 
@@ -500,7 +513,73 @@ def generate_smurfing(accounts_df, transactions_df, mule_pool, target_count, rng
 
     return fraud_df
 
+def generate_mule_to_mule(mule_pools, accounts_df, target_count, rng):
 
+    all_mules = np.concatenate([mule_pools['app'], mule_pools['ato'], mule_pools['business'], mule_pools['shared']])
+
+    n_total_transactions = target_count
+
+    sender_ids = rng.choice(all_mules, size = n_total_transactions)
+    is_mule_to_mule = rng.random(n_total_transactions) < MULE_TO_MULE_SPLIT
+
+    mule_to_mule_receivers = rng.choice(all_mules, size = is_mule_to_mule.sum())
+
+    all_accounts_ids = accounts_df['account_id'].values
+    cash_out_receivers = rng.choice(all_accounts_ids, size = (~is_mule_to_mule).sum())
+
+    receiver_ids = np.empty(n_total_transactions, dtype = int)
+    receiver_ids[is_mule_to_mule] = mule_to_mule_receivers
+    receiver_ids[~is_mule_to_mule] = cash_out_receivers
+
+    self_collisions = sender_ids == receiver_ids
+    n_collisions = self_collisions.sum()
+    if n_collisions > 0:
+        receiver_ids[self_collisions] = rng.choice(all_accounts_ids, size = n_collisions)
+
+
+    amounts = sample_fraud_amounts(n_total_transactions, MULE_AMOUNT_WEIGHTS, rng)
+
+    timestamps = sample_fraud_timestamps(n_total_transactions, {}, rng)
+
+    concepts = np.full(n_total_transactions, "", dtype = object)
+    roll = rng.random(n_total_transactions)
+    is_generic = roll >= MULE_CONCEPT_BLANK_RATE
+
+    n_generic = is_generic.sum()
+    if n_generic > 0:
+        generic_names = list(ATO_GENERIC_CONCEPTS.keys())
+        generic_weights = np.array(list(ATO_GENERIC_CONCEPTS.values()))
+        generic_probs = generic_weights / generic_weights.sum()
+        concepts[is_generic] = rng.choice(generic_names, size=n_generic, p=generic_probs)
+
+    event_ids = np.arange(n_total_transactions)
+
+    fraud_df = pd.DataFrame({
+        "sender_account_id": sender_ids,
+        "receiver_account_id": receiver_ids,
+        "amount": amounts,
+        "transaction_date": timestamps,
+        "concept_pago": concepts,
+        "is_fraud": True,
+        "fraud_typology": 'mule_to_mule',
+        "status": "Liquidada",
+        "fraud_event_id": event_ids
+    })
+
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
+        on='sender_account_id',
+        how='left'
+    )
+    fraud_df = fraud_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
+        on='receiver_account_id',
+        how='left'
+    )
+
+    return fraud_df
 
 
 if __name__ == '__main__':
@@ -523,3 +602,6 @@ if __name__ == '__main__':
 
     smurfing_df = generate_smurfing(accounts_df, transactions_df, mule_pools['shared'], 325, rng)
     print(f"Generated {len(smurfing_df)} smurfing transactions")
+
+    mule_fraud_df = generate_mule_to_mule(mule_pools, accounts_df, 645, rng)
+    print(f"Generated {len(mule_fraud_df)} mule-to-mule transactions")
