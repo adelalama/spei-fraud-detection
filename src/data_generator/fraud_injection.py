@@ -97,6 +97,21 @@ MULE_AMOUNT_WEIGHTS = {
 MULE_TO_MULE_SPLIT = 0.50
 MULE_CONCEPT_BLANK_RATE = 0.85
 
+FRAUD_RATE = 0.015
+
+TYPOLOGY_MIX = {
+    'app_fraud': 0.35,
+    'ato': 0.27,
+    'mule_to_mule': 0.20,
+    'smurfing': 0.10,
+    'business_impersonation': 0.08,
+}
+
+COLUMN_ORDER = [
+        'transaction_id', 'sender_account_id', 'sender_clabe', 'receiver_account_id', 'receiver_clabe',
+        'amount','transaction_date', 'concept_pago','status','is_fraud','fraud_typology','fraud_event_id'
+    ]
+
 def select_mule_accounts(accounts_df, rng):
 
     scale_factor = len(accounts_df)/ 10_000
@@ -583,26 +598,88 @@ def generate_mule_to_mule(mule_pools, accounts_df, target_count, rng):
     return fraud_df
 
 
+def inject_fraud(transactions_df, accounts_df, seed = DEFAULT_SEED):
+    """Inject fraud transactions of all 5 typologies into transactions_df"""
+
+    rng = np.random.default_rng(seed)
+
+    target_total_fraud = int(len(transactions_df) * FRAUD_RATE)
+    target_app = int(target_total_fraud * TYPOLOGY_MIX['app_fraud'])
+    target_ato = int(target_total_fraud * TYPOLOGY_MIX['ato'])
+    target_mule = int(target_total_fraud * TYPOLOGY_MIX['mule_to_mule'])
+    target_smurfing = int(target_total_fraud * TYPOLOGY_MIX['smurfing'])
+    target_business = int(target_total_fraud * TYPOLOGY_MIX['business_impersonation'])
+
+    mule_pools = select_mule_accounts(accounts_df, rng)
+
+    app_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], target_app, rng)
+
+    business_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], target_business ,rng)
+
+    ato_df = generate_ato(accounts_df, transactions_df, mule_pools['ato'], target_ato, rng)
+
+    smurfing_df = generate_smurfing(accounts_df, transactions_df, mule_pools['shared'], target_smurfing, rng)
+
+    mule_df = generate_mule_to_mule(mule_pools, accounts_df, target_mule ,rng)
+
+    offset = 0
+    for df in [app_df, business_df, ato_df, smurfing_df, mule_df]:
+        df['fraud_event_id'] = df['fraud_event_id'] + offset
+        offset = df['fraud_event_id'].max() +1
+
+    all_fraud_df = pd.concat([app_df, business_df, ato_df, smurfing_df, mule_df ], ignore_index=True)
+
+    all_fraud_df['transaction_id'] = -1
+
+    final_df = pd.concat([transactions_df, all_fraud_df], ignore_index=True)
+
+    final_df = final_df.sort_values('transaction_date').reset_index(drop=True)
+
+    final_df['transaction_id'] = np.arange(len(final_df))
+
+    final_df = final_df[COLUMN_ORDER]
+
+    validate_fraud_injection(final_df, accounts_df)
+
+    return final_df
+
+
+def validate_fraud_injection(final_df, accounts_df):
+    """Validates the adequate concatenation of combined transactions and fraud data frame"""
+
+    #fraud rate approx target
+    fraud_rate = final_df['is_fraud'].mean()
+    assert .014 <= fraud_rate <= .016, 'fraud rate outside expected range'
+
+    #valid fraud typologies
+    valid_typologies = {'app_fraud', 'ato', 'mule_to_mule', 'smurfing', 'business_impersonation'}
+    fraud_rows = final_df[final_df['is_fraud']]
+    assert fraud_rows['fraud_typology'].isin(valid_typologies).all(), 'Invalid typology in df'
+
+    #transaction_id sequential & unique
+    assert (final_df['transaction_id'] == np.arange(len(final_df))).all(), 'transaction_id non sequential'
+
+    #transaction chronology preserved
+    assert final_df['transaction_date'].is_monotonic_increasing, 'Not chronologically sorted'
+
+    #fraud_typologies are consistent with fraud events
+    event_typology_counts = fraud_rows.groupby('fraud_event_id')['fraud_typology'].nunique()
+    assert (event_typology_counts == 1).all(), 'fraud_event_id spans multiple typologies'
+
+    #validating sender and receiver ids
+    valid_ids = set(accounts_df['account_id'])
+    assert final_df['sender_account_id'].isin(valid_ids).all(), 'Invalid sender IDs'
+    assert final_df['receiver_account_id'].isin(valid_ids).all(), 'Invalid receiver IDs'
+
+
 if __name__ == '__main__':
 
     accounts_df = generate_accounts(10_000)
     transactions_df = generate_transactions(accounts_df)
     rng = np.random.default_rng(DEFAULT_SEED)
+    final_df = inject_fraud(transactions_df, accounts_df)
 
-    mule_pools = select_mule_accounts(accounts_df, rng)
-
-    app_fraud_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], 1130, rng)
-    print(f"Generated {len(app_fraud_df)} APP fraud transactions")
-
-    business_fraud_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], 260, rng)
-    print(f"Generated {len(business_fraud_df)} business impersonation transactions")
-
-    ato_fraud_df = generate_ato(accounts_df, transactions_df, mule_pools['ato'], 870, rng)
-    print(f"Generated {len(ato_fraud_df)} ATO fraud transactions")
-
-
-    smurfing_df = generate_smurfing(accounts_df, transactions_df, mule_pools['shared'], 325, rng)
-    print(f"Generated {len(smurfing_df)} smurfing transactions")
-
-    mule_fraud_df = generate_mule_to_mule(mule_pools, accounts_df, 645, rng)
-    print(f"Generated {len(mule_fraud_df)} mule-to-mule transactions")
+    print(f"Final number of transactions: {len(final_df)}")
+    print(f"Fraud rate: {final_df['is_fraud'].mean() * 100: .2f}%")
+    print(f"Typology counts:")
+    print(final_df['fraud_typology'].value_counts())
