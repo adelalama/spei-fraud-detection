@@ -514,6 +514,7 @@ def generate_smurfing(accounts_df, transactions_df, mule_pool, target_count, rng
     return fraud_df
 
 def generate_mule_to_mule(mule_pools, accounts_df, target_count, rng):
+    """Generate mule_to_mule and mule cash out fraud transactions"""
 
     all_mules = np.concatenate([mule_pools['app'], mule_pools['ato'], mule_pools['business'], mule_pools['shared']])
 
