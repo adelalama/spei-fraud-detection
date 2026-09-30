@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: spei_raw
+    description: Raw SPEI data uploaded from Python pipeline
+    tables:
+      - name: accounts
+        description: Synthetic Mexican bank accounts
+      - name: transactions
+        description: Synthetic SPEI transactions
