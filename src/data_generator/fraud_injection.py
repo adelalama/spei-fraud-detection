@@ -5,9 +5,8 @@ from decimal import Decimal
 
 from numpy.ma.core import concatenate
 
-from config import SIMULATION_START, SIMULATION_END, DEFAULT_SEED
-from src.data_generator.transactions import LEGITIMATE_CONCEPTS, generate_transactions
-from transactions import AMOUNT_REGIMES, HOUR_WEIGHTS, DAY_OF_WEEK_WEIGHTS
+from src.data_generator.config import SIMULATION_START, SIMULATION_END, DEFAULT_SEED
+from src.data_generator.transactions import LEGITIMATE_CONCEPTS, generate_transactions, AMOUNT_REGIMES, HOUR_WEIGHTS, DAY_OF_WEEK_WEIGHTS
 from src.data_generator.accounts import generate_accounts
 
 MULE_MAX_AGE_DAYS = 365
