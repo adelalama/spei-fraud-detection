@@ -37,7 +37,8 @@ models:
         description: State of transaction, 'Liquidada' by default
         tests:
           - accepted_values:
-              values: ['Liquidada']
+              arguments:
+                values: ['Liquidada']
       - name: is_fraud
         description: Boolean fraud label
         tests:
@@ -50,7 +51,8 @@ models:
         description: Type of fraud in transaction
         tests:
           - accepted_values:
-              values: ['app_fraud', 'ato', 'mule_to_mule', 'smurfing', 'business_impersonation']
+              arguments:
+                values: ['app_fraud', 'ato', 'mule_to_mule', 'smurfing', 'business_impersonation']
 
   - name: stg_accounts
     description: Bank accounts with unique Clabe identifiers
