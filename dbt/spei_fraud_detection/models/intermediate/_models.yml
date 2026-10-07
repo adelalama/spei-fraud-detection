@@ -1,0 +1,94 @@
+version: 2
+
+models:
+  - name: int_sender_lifetime_stats
+    description: Per sender aggregate statistics for legitimate transactions
+    columns:
+      - name: sender_account_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: total_txns_sent
+        tests:
+          - not_null
+  - name: int_receiver_lifetime_stats
+    description: Per receiver aggregate statistics for legitimate transactions
+    columns:
+      - name: receiver_account_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: total_txns_received
+        tests:
+          - not_null
+  - name: int_sender_rolling_stats
+    description: Per transaction rolling window stats for sender
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_transactions')
+                field: transaction_id
+      - name: sender_account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+  - name: int_receiver_rolling_stats
+    description: Per transaction rolling window stats for receiver
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_transactions')
+                field: transaction_id
+      - name: sender_account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: receiver_account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: int_beneficiary_history
+        description: Sender/receiver pair relationship history on legitimate transactions
+        columns:
+          - name: sender_account_id
+            tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: ref('stg_accounts')
+                    field: account_id
+          - name: receiver_account_id
+            tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: ref('stg_accounts')
+                    field: account_id
+          - name: pair_txn_count
+            tests:
+              - not_null
