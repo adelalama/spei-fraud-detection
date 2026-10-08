@@ -149,6 +149,8 @@ models:
         description: Sender's average amount sent in the prior 30 days.
       - name: sender_amount_max_30d
         description: Sender's max amount sent in the prior 30 days.
+      - name: sender_distinct_receivers_as_of
+        description: Count of distinct legitimate receivers this sender had transacted with before.
 
   - name: int_receiver_rolling_stats
     description: Per-transaction rolling window stats for the receiver's prior incoming activity, point-in-time correct.
@@ -206,3 +208,5 @@ models:
         description: Receiver's average amount received in the prior 30 days.
       - name: receiver_amount_max_30d
         description: Receiver's max amount received in the prior 30 days.
+      - name: receiver_distinct_senders_as_of
+        description: Count of distinct legitimate senders this receiver had transacted with before.
