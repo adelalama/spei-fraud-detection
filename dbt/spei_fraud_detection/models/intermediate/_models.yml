@@ -2,9 +2,10 @@ version: 2
 
 models:
   - name: int_sender_lifetime_stats
-    description: Per sender aggregate statistics for legitimate transactions
+    description: Per-sender aggregate statistics across legitimate transactions.
     columns:
       - name: sender_account_id
+        description: Account that sent transactions.
         tests:
           - unique
           - not_null
@@ -13,12 +14,31 @@ models:
                 to: ref('stg_accounts')
                 field: account_id
       - name: total_txns_sent
+        description: Count of transactions sent.
         tests:
           - not_null
+      - name: total_amount_sent
+        description: Sum of amounts sent, in MXN.
+      - name: avg_amount_sent
+        description: Mean amount sent.
+      - name: median_amount_sent
+        description: Approximate median amount sent.
+      - name: stddev_amount_sent
+        description: Standard deviation of amounts sent.
+      - name: distinct_receivers_count
+        description: Unique receivers this sender has transacted with.
+      - name: first_txn_date
+        description: Date of first transaction sent.
+      - name: last_txn_date
+        description: Date of most recent transaction sent.
+      - name: days_active
+        description: Days between first and last transaction sent.
+
   - name: int_receiver_lifetime_stats
-    description: Per receiver aggregate statistics for legitimate transactions
+    description: Per-receiver aggregate statistics across legitimate transactions.
     columns:
       - name: receiver_account_id
+        description: Account that received transactions.
         tests:
           - unique
           - not_null
@@ -27,38 +47,31 @@ models:
                 to: ref('stg_accounts')
                 field: account_id
       - name: total_txns_received
+        description: Count of transactions received.
         tests:
           - not_null
-  - name: int_sender_rolling_stats
-    description: Per transaction rolling window stats for sender
+      - name: total_amount_received
+        description: Sum of amounts received, in MXN.
+      - name: avg_amount_received
+        description: Mean amount received.
+      - name: median_amount_received
+        description: Approximate median amount received.
+      - name: stddev_amount_received
+        description: Standard deviation of amounts received.
+      - name: distinct_senders_count
+        description: Unique senders this receiver has transacted with.
+      - name: first_received_date
+        description: Date of first transaction received.
+      - name: last_received_date
+        description: Date of most recent transaction received.
+      - name: days_active_as_receiver
+        description: Days between first and last transaction received.
+
+  - name: int_beneficiary_history
+    description: Per sender-receiver pair relationship history across legitimate transactions.
     columns:
-      - name: transaction_id
-        tests:
-          - unique
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('stg_transactions')
-                field: transaction_id
       - name: sender_account_id
-        tests:
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('stg_accounts')
-                field: account_id
-  - name: int_receiver_rolling_stats
-    description: Per transaction rolling window stats for receiver
-    columns:
-      - name: transaction_id
-        tests:
-          - unique
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('stg_transactions')
-                field: transaction_id
-      - name: sender_account_id
+        description: Account that sent in this pair.
         tests:
           - not_null
           - relationships:
@@ -66,29 +79,130 @@ models:
                 to: ref('stg_accounts')
                 field: account_id
       - name: receiver_account_id
+        description: Account that received in this pair.
         tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('stg_accounts')
                 field: account_id
-      - name: int_beneficiary_history
-        description: Sender/receiver pair relationship history on legitimate transactions
-        columns:
-          - name: sender_account_id
-            tests:
-              - not_null
-              - relationships:
-                  arguments:
-                    to: ref('stg_accounts')
-                    field: account_id
-          - name: receiver_account_id
-            tests:
-              - not_null
-              - relationships:
-                  arguments:
-                    to: ref('stg_accounts')
-                    field: account_id
-          - name: pair_txn_count
-            tests:
-              - not_null
+      - name: pair_txn_count
+        description: Count of transactions between this pair.
+        tests:
+          - not_null
+      - name: pair_total_amount
+        description: Sum of amounts between this pair, in MXN.
+      - name: pair_avg_amount
+        description: Mean amount between this pair.
+      - name: pair_first_txn_date
+        description: Date of first transaction between this pair.
+      - name: pair_last_txn_date
+        description: Date of most recent transaction between this pair.
+      - name: pair_days_span
+        description: Days between the pair's first and last transaction.
+
+  - name: int_sender_rolling_stats
+    description: Per-transaction rolling window stats for the sender's prior activity, point-in-time correct.
+    columns:
+      - name: transaction_id
+        description: Unique transaction identifier.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_transactions')
+                field: transaction_id
+      - name: sender_account_id
+        description: Account that sent this transaction.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: transaction_date
+        description: Transaction timestamp.
+      - name: amount
+        description: Transaction amount in MXN.
+      - name: sender_txn_count_24h
+        description: Sender's transaction count in the prior 24 hours.
+      - name: sender_amount_sum_24h
+        description: Sender's total amount sent in the prior 24 hours.
+      - name: sender_amount_avg_24h
+        description: Sender's average amount sent in the prior 24 hours.
+      - name: sender_amount_max_24h
+        description: Sender's max amount sent in the prior 24 hours.
+      - name: sender_txn_count_7d
+        description: Sender's transaction count in the prior 7 days.
+      - name: sender_amount_sum_7d
+        description: Sender's total amount sent in the prior 7 days.
+      - name: sender_amount_avg_7d
+        description: Sender's average amount sent in the prior 7 days.
+      - name: sender_amount_max_7d
+        description: Sender's max amount sent in the prior 7 days.
+      - name: sender_txn_count_30d
+        description: Sender's transaction count in the prior 30 days.
+      - name: sender_amount_sum_30d
+        description: Sender's total amount sent in the prior 30 days.
+      - name: sender_amount_avg_30d
+        description: Sender's average amount sent in the prior 30 days.
+      - name: sender_amount_max_30d
+        description: Sender's max amount sent in the prior 30 days.
+
+  - name: int_receiver_rolling_stats
+    description: Per-transaction rolling window stats for the receiver's prior incoming activity, point-in-time correct.
+    columns:
+      - name: transaction_id
+        description: Unique transaction identifier.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_transactions')
+                field: transaction_id
+      - name: sender_account_id
+        description: Account that sent this transaction.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: receiver_account_id
+        description: Account that received this transaction.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: transaction_date
+        description: Transaction timestamp.
+      - name: amount
+        description: Transaction amount in MXN.
+      - name: receiver_txn_count_24h
+        description: Receiver's transaction count in the prior 24 hours.
+      - name: receiver_amount_sum_24h
+        description: Receiver's total amount received in the prior 24 hours.
+      - name: receiver_amount_avg_24h
+        description: Receiver's average amount received in the prior 24 hours.
+      - name: receiver_amount_max_24h
+        description: Receiver's max amount received in the prior 24 hours.
+      - name: receiver_txn_count_7d
+        description: Receiver's transaction count in the prior 7 days.
+      - name: receiver_amount_sum_7d
+        description: Receiver's total amount received in the prior 7 days.
+      - name: receiver_amount_avg_7d
+        description: Receiver's average amount received in the prior 7 days.
+      - name: receiver_amount_max_7d
+        description: Receiver's max amount received in the prior 7 days.
+      - name: receiver_txn_count_30d
+        description: Receiver's transaction count in the prior 30 days.
+      - name: receiver_amount_sum_30d
+        description: Receiver's total amount received in the prior 30 days.
+      - name: receiver_amount_avg_30d
+        description: Receiver's average amount received in the prior 30 days.
+      - name: receiver_amount_max_30d
+        description: Receiver's max amount received in the prior 30 days.

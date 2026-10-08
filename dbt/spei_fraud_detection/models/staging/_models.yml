@@ -2,45 +2,51 @@ version: 2
 
 models:
   - name: stg_transactions
-    description: Spei transactions with fraud labels
+    description: SPEI transactions with fraud labels.
     columns:
       - name: transaction_id
-        description: Identifier for each transaction
+        description: Unique transaction identifier.
         tests:
           - unique
           - not_null
       - name: sender_account_id
-        description: Clabe identifying sender account
+        description: Account that initiated the transaction.
         tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('stg_accounts')
                 field: account_id
+      - name: sender_clabe
+        description: CLABE of the sender account.
       - name: receiver_account_id
-        description: Clabe identifying receiver account
+        description: Account that received the transaction.
         tests:
           - not_null
           - relationships:
               arguments:
                 to: ref('stg_accounts')
                 field: account_id
+      - name: receiver_clabe
+        description: CLABE of the receiver account.
       - name: amount
-        description: Transaction amount in MXN pesos
+        description: Transaction amount in MXN.
         tests:
           - not_null
       - name: transaction_date
-        description: Date of transaction
+        description: Timestamp of the transaction.
         tests:
           - not_null
+      - name: concept_pago
+        description: Free-text payment concept entered by the sender.
       - name: status
-        description: State of transaction, 'Liquidada' by default
+        description: Transaction state. Always 'Liquidada' in this dataset.
         tests:
           - accepted_values:
               arguments:
                 values: ['Liquidada']
       - name: is_fraud
-        description: Boolean fraud label
+        description: True if the transaction is fraudulent.
         tests:
           - not_null
           - accepted_values:
@@ -48,39 +54,55 @@ models:
                 values: [true, false]
                 quote: false
       - name: fraud_typology
-        description: Type of fraud in transaction
+        description: Fraud category when is_fraud is true, otherwise NULL.
         tests:
           - accepted_values:
               arguments:
                 values: ['app_fraud', 'ato', 'mule_to_mule', 'smurfing', 'business_impersonation']
+      - name: fraud_event_id
+        description: Groups transactions belonging to the same fraud event. NULL for legitimate transactions.
 
   - name: stg_accounts
-    description: Bank accounts with unique Clabe identifiers
+    description: Bank accounts with CLABE identifiers.
     columns:
       - name: account_id
-        description: unique identifier per account
+        description: Unique account identifier.
         tests:
           - unique
           - not_null
+      - name: person_id
+        description: Identifier of the person who owns the account.
+      - name: bank_code
+        description: Three-digit code identifying the issuing bank.
+      - name: plaza_code
+        description: Three-digit code identifying the account's plaza (branch region).
+      - name: account_number
+        description: Account number within the bank.
       - name: clabe
-        description: Unique Clabe generated in accordance to Banxico standard
+        description: 18-digit CLABE following Banxico standard.
         tests:
           - unique
           - not_null
       - name: kyc_tier
-        description: Client categorization
+        description: KYC classification tier (1 lightest, 4 highest).
         tests:
           - not_null
           - accepted_values:
-              values: [1, 2, 3, 4]
-              quote: false
-      - name: activity_segment
-        description: Amount of activity the account has
-        tests:
-          - not_null
-          - accepted_values:
-              values: ['dormant', 'light', 'regular', 'heavy', 'power']
+              arguments:
+                values: [1, 2, 3, 4]
+                quote: false
       - name: creation_date
-        description: Date of account creation
+        description: Date the account was created.
         tests:
           - not_null
+      - name: phone_number
+        description: Phone number associated with the account.
+      - name: activity_segment
+        description: Expected activity level for this account.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['dormant', 'light', 'regular', 'heavy', 'power']
+      - name: mule_type
+        description: Mule classification for accounts flagged in fraud generation. NULL for non-mule accounts.
