@@ -6,7 +6,7 @@
         ('30d', '30', 'day'),
     ] %}
     {% set aggregates = [
-        ('count', '*', 'txn_count'),
+        ('count', '1', 'txn_count'),
         ('sum', 'amount', 'amount_sum'),
         ('avg', 'amount', 'amount_avg'),
         ('max', 'amount', 'amount_max'),
@@ -18,7 +18,7 @@
     {% for window_label, window_value, window_unit in windows %}
         {% for agg_func, agg_column, agg_alias in aggregates %}
             {% set ns.count = ns.count + 1 %}
-            {{ agg_func }}({{ agg_column }}) over (
+            {{ agg_func }}(case when is_fraud = false then {{ agg_column }} end) over (
                 partition by {{ partition_column }}
                 order by transaction_date
                 range between interval '{{ window_value }}' {{ window_unit }} preceding and interval '1' second preceding
