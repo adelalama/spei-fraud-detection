@@ -1,0 +1,206 @@
+version: 2
+
+models:
+  - name: fct_transaction_features
+    description: Per-transaction feature table consumed by the fraud detection ML model. Grain is one row per transaction. Includes temporal, amount, behavioral, beneficiary, and account-context features plus the is_fraud target label.
+    columns:
+      - name: transaction_id
+        description: Unique transaction identifier. Grain of this model.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_transactions')
+                field: transaction_id
+
+      - name: sender_account_id
+        description: Account that initiated the transaction.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+
+      - name: receiver_account_id
+        description: Account that received the transaction.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+
+      - name: transaction_date
+        description: Timestamp of the transaction.
+
+      - name: amount
+        description: Transaction amount in MXN.
+
+      - name: concept_pago
+        description: Free-text payment concept entered by the sender.
+
+      - name: hour
+        description: Hour of day (0-23) extracted from transaction_date.
+
+      - name: day_of_week
+        description: Day of week (1-7, Monday=1) extracted from transaction_date.
+
+      - name: is_off_hours
+        description: True if the transaction occurred between midnight and 5am or between 10pm and midnight.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+      - name: amount_vs_sender_avg
+        description: Ratio of this transaction's amount to the sender's lifetime legitimate average. NULL for senders with no history.
+
+      - name: amount_vs_sender_median
+        description: Ratio of this transaction's amount to the sender's lifetime legitimate median. NULL for senders with no history.
+
+      - name: near_threshold_flag
+        description: True if amount is between 11,000 and 13,200 MXN (near SPEI smurfing threshold).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+      - name: sender_txn_count_24h
+        description: Sender's count of prior legitimate transactions in the last 24 hours.
+
+      - name: sender_txn_count_7d
+        description: Sender's count of prior legitimate transactions in the last 7 days.
+
+      - name: sender_txn_count_30d
+        description: Sender's count of prior legitimate transactions in the last 30 days.
+
+      - name: sender_amount_sum_24h
+        description: Sum of sender's prior legitimate transaction amounts in the last 24 hours.
+
+      - name: sender_amount_avg_24h
+        description: Average of sender's prior legitimate transaction amounts in the last 24 hours.
+
+      - name: sender_amount_max_7d
+        description: Max of sender's prior legitimate transaction amounts in the last 7 days.
+
+      - name: sender_distinct_receivers_as_of
+        description: Count of distinct legitimate receivers this sender had transacted with prior to this transaction.
+
+      - name: sender_txn_count_vs_30d_avg
+        description: Ratio of sender's 24h transaction count to their average daily legitimate rate over 30 days. Behavioral change signal.
+
+      - name: receiver_txn_count_24h
+        description: Receiver's count of prior legitimate incoming transactions in the last 24 hours.
+
+      - name: receiver_txn_count_7d
+        description: Receiver's count of prior legitimate incoming transactions in the last 7 days.
+
+      - name: receiver_txn_count_30d
+        description: Receiver's count of prior legitimate incoming transactions in the last 30 days.
+
+      - name: receiver_amount_max_7d
+        description: Max of receiver's prior legitimate incoming amounts in the last 7 days.
+
+      - name: receiver_distinct_senders_as_of
+        description: Count of distinct legitimate senders this receiver had received from prior to this transaction.
+
+      - name: total_txns_received
+        description: Receiver's lifetime total of legitimate incoming transactions.
+
+      - name: receiver_txn_count_vs_30d_avg
+        description: Ratio of receiver's 24h incoming count to their average daily legitimate rate over 30 days. Behavioral change signal.
+
+      - name: is_new_beneficiary
+        description: True if this transaction is the first between this sender-receiver pair.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+      - name: pair_txn_count
+        description: Total count of transactions between this sender-receiver pair.
+
+      - name: sender_kyc_tier
+        description: Sender's KYC classification tier (1 lightest, 4 highest).
+
+      - name: sender_activity_segment
+        description: Sender's expected activity level (dormant, light, regular, heavy, power).
+
+      - name: is_fraud
+        description: True if the transaction is fraudulent. ML target label.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+
+  - name: dim_accounts
+    description: Per-account dimension table enriched with lifetime stats and fraud exposure metrics. Grain is one row per account. Supports analyst investigation and future scoring API lookups.
+    columns:
+      - name: account_id
+        description: Unique account identifier. Grain of this model.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+
+      - name: clabe
+        description: 18-digit CLABE following Banxico standard.
+
+      - name: kyc_tier
+        description: KYC classification tier (1 lightest, 4 highest).
+        tests:
+          - not_null
+
+      - name: activity_segment
+        description: Expected activity level (dormant, light, regular, heavy, power).
+        tests:
+          - not_null
+
+      - name: creation_date
+        description: Date the account was created.
+
+      - name: total_txns_sent
+        description: Lifetime count of legitimate transactions this account has sent.
+
+      - name: total_amount_sent
+        description: Lifetime sum of legitimate transaction amounts this account has sent, in MXN.
+
+      - name: avg_amount_sent
+        description: Mean legitimate transaction amount this account has sent.
+
+      - name: distinct_receivers_count
+        description: Lifetime count of distinct receivers this account has sent legitimate transactions to.
+
+      - name: total_txns_received
+        description: Lifetime count of legitimate transactions this account has received.
+
+      - name: total_amount_received
+        description: Lifetime sum of legitimate transaction amounts this account has received, in MXN.
+
+      - name: distinct_senders_count
+        description: Lifetime count of distinct senders this account has received legitimate transactions from.
+
+      - name: fraud_txns_sent
+        description: Lifetime count of fraudulent transactions this account initiated.
+
+      - name: fraud_txns_received
+        description: Lifetime count of fraudulent transactions this account received.
+
+      - name: fraud_rate_as_sender
+        description: Fraction of this account's total outgoing transactions that were fraudulent. NULL for accounts with no activity.
+
+      - name: fraud_rate_as_receiver
+        description: Fraction of this account's total incoming transactions that were fraudulent. NULL for accounts with no activity.
