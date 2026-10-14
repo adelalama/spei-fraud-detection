@@ -156,3 +156,4 @@ dbt_packages/
 .user.yml
 profiles.yml
 artifacts/
+notebooks/_*.ipynb
