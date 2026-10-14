@@ -59,3 +59,23 @@ def load_dim_accounts(refresh: bool = False) -> pd.DataFrame:
         return df
     finally:
         connection.close()
+
+def load_fraud_typology(refresh: bool = False) -> pd.DataFrame:
+    """Loads fraud typology labels for all fraud transactions"""
+
+    cache_path = CACHE_DIR / 'fraud_typology.parquet'
+    if cache_path.exists() and not refresh:
+        logger.info('Loading fraud typlogy from cache')
+        return pd.read_parquet(cache_path)
+
+    logger.info('Querying Athena for fraud typology labels')
+    query = f'SELECT transaction_id, fraud_typology FROM {DBT_SCHEMA}.stg_transactions WHERE is_fraud = true'
+    connection = _get_athena_connection()
+    try:
+        df = pd.read_sql(query, connection)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache_path, index = False)
+        return df
+    finally:
+        connection.close()
+

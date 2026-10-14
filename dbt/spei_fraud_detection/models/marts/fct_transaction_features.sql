@@ -28,7 +28,8 @@ with
             sender_amount_sum_24h,
             sender_amount_avg_24h,
             sender_amount_max_7d,
-            sender_distinct_receivers_as_of
+            sender_distinct_receivers_as_of,
+            pair_txn_count_as_of
         from {{ ref('int_sender_rolling_stats') }}
     ),
 
@@ -50,14 +51,6 @@ with
         from {{ ref('int_receiver_rolling_stats') }}
     ),
 
-    beneficiary as (
-        select
-            sender_account_id,
-            receiver_account_id,
-            pair_txn_count
-        from {{ ref('int_beneficiary_history') }}
-    ),
-
     accounts as (
         select
             account_id,
@@ -67,8 +60,7 @@ with
     )
 
 select
-
-    -- base fields
+    -- Base passthrough fields
     t.transaction_id,
     t.sender_account_id,
     t.receiver_account_id,
@@ -76,17 +68,17 @@ select
     t.amount,
     t.concept_pago,
 
-    -- temporal features
+    -- Temporal features
     hour(t.transaction_date) as hour,
     day_of_week(t.transaction_date) as day_of_week,
     case
         when hour(t.transaction_date) between 0 and 5
-            or hour(t.transaction_date) between 22 and 23
+          or hour(t.transaction_date) between 22 and 23
         then true
         else false
     end as is_off_hours,
 
-    -- amount features
+    -- Amount features
     t.amount / nullif(sl.avg_amount_sent, 0) as amount_vs_sender_avg,
     t.amount / nullif(sl.median_amount_sent, 0) as amount_vs_sender_median,
     case
@@ -95,7 +87,7 @@ select
         else false
     end as near_threshold_flag,
 
-    -- sender behaviour features
+    -- Sender behavior features
     sr.sender_txn_count_24h,
     sr.sender_txn_count_7d,
     sr.sender_txn_count_30d,
@@ -103,42 +95,42 @@ select
     sr.sender_amount_avg_24h,
     sr.sender_amount_max_7d,
     sr.sender_distinct_receivers_as_of,
-    sr.sender_txn_count_24h / nullif(sr.sender_txn_count_30d / 30.0, 0) as sender_txn_count_vs_30d_avg,
 
-    -- receiver behavioral features
+    -- Sender behavioral change ratio
+    sr.sender_txn_count_24h / nullif(sr.sender_txn_count_30d / 30.0, 0)
+        as sender_txn_count_vs_30d_avg,
+
+    -- Receiver behavior features
     rr.receiver_txn_count_24h,
     rr.receiver_txn_count_7d,
     rr.receiver_txn_count_30d,
     rr.receiver_amount_max_7d,
     rr.receiver_distinct_senders_as_of,
     rl.total_txns_received,
-    rr.receiver_txn_count_24h / nullif(rr.receiver_txn_count_30d / 30.0, 0) as receiver_txn_count_vs_30d_avg,
 
-    -- beneficiary features
-    case when b.pair_txn_count = 1 then true else false end as is_new_beneficiary,
-    b.pair_txn_count,
+    -- Receiver behavioral change ratio
+    rr.receiver_txn_count_24h / nullif(rr.receiver_txn_count_30d / 30.0, 0)
+        as receiver_txn_count_vs_30d_avg,
 
-    -- account context features
+    -- Beneficiary features (now from int_sender_rolling_stats)
+    case when sr.pair_txn_count_as_of = 0 then true else false end as is_new_beneficiary,
+    sr.pair_txn_count_as_of as pair_txn_count,
+
+    -- Account context features
     a.kyc_tier as sender_kyc_tier,
     a.activity_segment as sender_activity_segment,
 
-    --target
+    -- Target
     t.is_fraud
 
-    from transactions t
-    left join sender_lifetime sl
-        on t.sender_account_id = sl.sender_account_id
-    left join sender_rolling sr
-        on t.transaction_id = sr.transaction_id
-    left join receiver_lifetime rl
-        on t.receiver_account_id = rl.receiver_account_id
-    left join receiver_rolling rr
-        on t.transaction_id = rr.transaction_id
-    left join beneficiary b
-        on t.sender_account_id = b.sender_account_id
-        and t.receiver_account_id = b.receiver_account_id
-    left join accounts a
-        on t.sender_account_id = a.account_id
-
-
-
+from transactions t
+left join sender_lifetime sl
+    on t.sender_account_id = sl.sender_account_id
+left join sender_rolling sr
+    on t.transaction_id = sr.transaction_id
+left join receiver_lifetime rl
+    on t.receiver_account_id = rl.receiver_account_id
+left join receiver_rolling rr
+    on t.transaction_id = rr.transaction_id
+left join accounts a
+    on t.sender_account_id = a.account_id
