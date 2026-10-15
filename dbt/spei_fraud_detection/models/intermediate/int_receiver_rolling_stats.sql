@@ -23,6 +23,12 @@ select
 
     {{ rolling_window_aggregates('receiver_account_id', 'receiver') }},
 
-    {{ running_distinct_count('receiver_account_id', 'receiver', 'senders')}}
+    {{ running_distinct_count('receiver_account_id', 'receiver', 'senders')}},
+
+    count(case when is_fraud = false then 1 end) over (
+        partition by receiver_account_id
+        order by transaction_date
+        rows between unbounded preceding and 1 preceding
+    ) as receiver_txn_count_as_of
 
 from transactions_with_flags

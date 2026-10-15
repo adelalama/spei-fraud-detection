@@ -29,6 +29,12 @@ select
         partition by sender_account_id, receiver_account_id
         order by transaction_date
         rows between unbounded preceding and 1 preceding
-    ) as pair_txn_count_as_of
+    ) as pair_txn_count_as_of,
+
+    avg(case when is_fraud = false then amount end) over (
+        partition by sender_account_id
+        order by transaction_date
+        rows between unbounded preceding and 1 preceding
+    ) as sender_amount_avg_as_of
 
 from transactions_with_flags

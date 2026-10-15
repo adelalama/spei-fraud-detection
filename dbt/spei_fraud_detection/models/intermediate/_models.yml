@@ -151,6 +151,10 @@ models:
         description: Sender's max amount sent in the prior 30 days.
       - name: sender_distinct_receivers_as_of
         description: Count of distinct legitimate receivers this sender had transacted with before.
+      - name: pair_txn_count_as_of
+        description: Count of legitimate transactions between this sender-receiver pair prior to this transaction.
+      - name: sender_amount_avg_as_of
+        description: Cumulative average of legitimate amounts sent by this sender prior to this transaction (point-in-time, replaces leaking lifetime avg).
 
   - name: int_receiver_rolling_stats
     description: Per-transaction rolling window stats for the receiver's prior incoming activity, point-in-time correct.
@@ -210,3 +214,5 @@ models:
         description: Receiver's max amount received in the prior 30 days.
       - name: receiver_distinct_senders_as_of
         description: Count of distinct legitimate senders this receiver had transacted with before.
+      - name: receiver_txn_count_as_of
+        description: Cumulative count of legitimate transactions received by this account prior to this transaction.
