@@ -6,12 +6,25 @@ from decimal import Decimal
 from numpy.ma.core import concatenate
 
 from src.data_generator.config import SIMULATION_START, SIMULATION_END, DEFAULT_SEED
-from src.data_generator.transactions import LEGITIMATE_CONCEPTS, generate_transactions, AMOUNT_REGIMES, HOUR_WEIGHTS, DAY_OF_WEEK_WEIGHTS
+from src.data_generator.transactions import LEGITIMATE_CONCEPTS, generate_transactions, AMOUNT_REGIMES, HOUR_WEIGHTS, DAY_OF_WEEK_WEIGHTS, sample_amounts
 from src.data_generator.accounts import generate_accounts
 
 MULE_MAX_AGE_DAYS = 365
-MULE_KYC_TIERS = [1, 2]
-MULE_ACTIVITY_SEGMENTS = ['dormant', 'light']
+MULE_KYC_TIER_DISTRIBUTION = {
+    1: .3,
+    2: .5,
+    3: .15,
+    4: .05,
+}
+
+MULE_ACTIVITY_SEGMENT_DISTRIBUTION = {
+    'dormant': .25,
+    'light': .35,
+    'regular': .25,
+    'heavy': .1,
+    'power': .05,
+}
+
 MULE_POOL_COUNTS_PER_10K = {
     'app': 55,
     'ato': 30,
@@ -45,7 +58,7 @@ APP_FRAUD_VOCAB = {
 
 APP_AMOUNT_WEIGHTS = {'medium_retail': 60, 'large':30, 'small_retail':10}
 
-BUSINESS_AMOUNT_WEIGHTS = {'small_retail': 70, 'micro': 20, 'medium_retail': 10}
+BUSINESS_AMOUNT_WEIGHTS = {'small_retail': 20, 'medium_retail': 55, 'large': 25}
 
 BUSINESS_IMPERSONATION_VOCAB = {
     "membresia premium": 12,
@@ -76,15 +89,16 @@ ATO_GENERIC_CONCEPTS = {
 
 SMURFING_EVENT_SIZE_RANGE = (4, 8)
 
-SMURFING_AMOUNT_MODE_PROBS = [.8, .2]
+SMURFING_AMOUNT_MODE_PROBS = [.55, .35, .1]
 
 SMURFING_THRESHOLD_RANGE = (11_000, 13_199)
-SMURFING_MIXED_RANGE = (5_000, 10_999)
+SMURFING_MIXED_RANGE = (6_000, 10_999)
 
 SMURFING_RECEIVER_COUNT_PROBS = [0.60, 0.30, 0.10]
 
 SMURFING_TIMING_PROBS = [0.60, 0.30, 0.10]
 SMURFING_TIMING_WINDOWS_HOURS = [24, 72, 96]
+SMURFING_NOISE_RANGE = (15_000, 30_000)
 
 MULE_AMOUNT_WEIGHTS = {
     'medium_retail': 40,
@@ -117,28 +131,154 @@ def select_mule_accounts(accounts_df, rng):
     n_per_pool= {typology: int(count*scale_factor) for typology, count in MULE_POOL_COUNTS_PER_10K.items()}
     target_mules = sum(n_per_pool.values())
 
-    qualifying_mules = accounts_df[
-         (accounts_df['creation_date']>= pd.Timestamp(SIMULATION_START - timedelta(days=MULE_MAX_AGE_DAYS))) &
-         (accounts_df['kyc_tier'].isin(MULE_KYC_TIERS)) &
-         (accounts_df['activity_segment'].isin(MULE_ACTIVITY_SEGMENTS))
-          ]
+    age_cutoff = pd.Timestamp(SIMULATION_START - timedelta(days = MULE_MAX_AGE_DAYS))
+    eligible = accounts_df[accounts_df['creation_date'] >= age_cutoff].copy()
 
-    if len(qualifying_mules) < target_mules:
-        print(f'Warning: There are only {len(qualifying_mules)} qualifying mules for the {target_mules} targeted accounts')
+    eligible['tier_weight'] = eligible['kyc_tier'].map(MULE_KYC_TIER_DISTRIBUTION)
+    eligible['segment_weight'] = eligible['activity_segment'].map(MULE_ACTIVITY_SEGMENT_DISTRIBUTION)
+    eligible['mule_weight'] = eligible['tier_weight'] * eligible['segment_weight']
 
-    mule_sample = rng.choice(qualifying_mules['account_id'].values,  size = target_mules, replace = False)
+    probs = eligible['mule_weight'] / eligible['mule_weight'].sum()
+
+    if len(eligible) < target_mules:
+        print(f'Warning: Only {len(eligible)} eligible accounts for {target_mules} target mules.')
+
+    mule_sample = rng.choice(
+        eligible['account_id'].values,
+        size=target_mules,
+        replace=False,
+        p=probs.values
+    )
 
     mule_pools = {}
     start = 0
     for typology, count in n_per_pool.items():
         mule_pools[typology] = list(mule_sample[start:start+count])
 
-
     assert sum(len(pool) for pool in mule_pools.values()) == target_mules
     for typology, pool in mule_pools.items():
         assert len(set(pool)) == len(pool)
 
     return mule_pools
+
+def split_mules_into_fresh_and_cover(mule_pools, rng, fresh_rate = .3):
+    """Split all mules into fresh and cover (with legitimate transaction history before fraud)"""
+    all_mule_ids = np.array([aid for pool in mule_pools.values() for aid in pool])
+
+    shuffled = rng.permutation(all_mule_ids)
+
+    total_mules = len(shuffled)
+    n_fresh = int(total_mules * fresh_rate)
+
+    fresh_mule_ids = set(shuffled[:n_fresh])
+    cover_mule_ids = set(shuffled[n_fresh:])
+
+    return fresh_mule_ids, cover_mule_ids
+
+def build_mule_beneficiary_networks(cover_mule_ids, accounts_df, all_mule_ids, rng):
+    """Build small beneficiary networks for cover mules"""
+
+    non_mule_pool = accounts_df[~accounts_df['account_id'].isin(all_mule_ids)]['account_id'].values
+
+    networks = {}
+
+    for mule_id in cover_mule_ids:
+        network_size = rng.integers(3, 9)
+
+        eligible = non_mule_pool
+        network = rng.choice(eligible, size = network_size, replace = False)
+
+        networks[mule_id] = list(network)
+
+    return networks
+
+def generate_mule_cover_transactions(
+        cover_mule_ids,
+        accounts_df,
+        mule_networks,
+        non_mule_pool,
+        rng
+):
+    """Generate legitimate cover transactions for cover-mules across simulation window."""
+
+    sender_ids_list = []
+    receiver_ids_list = []
+    amounts_list = []
+    timestamps_list = []
+    concepts_list = []
+
+    sim_start = pd.Timestamp(SIMULATION_START)
+    sim_end = pd.Timestamp(SIMULATION_END)
+    window_seconds = (sim_end - sim_start).total_seconds()
+
+    for mule_id in cover_mule_ids:
+        n_cover_txns = rng.integers(10, 31)
+
+        network = mule_networks[mule_id]
+        network_rolls = rng.random(n_cover_txns)
+        use_network = network_rolls < .9
+
+        receivers = []
+        for i in range(n_cover_txns):
+            if use_network[i]:
+                receivers.append(rng.choice(network))
+            else:
+                receivers.append(rng.choice(non_mule_pool))
+
+        offset_seconds = rng.uniform(0, window_seconds, size=n_cover_txns)
+        timestamps = sim_start + pd.to_timedelta(offset_seconds, unit='s')
+
+        amounts = sample_amounts(n_cover_txns, rng)
+
+        concept_names = list(LEGITIMATE_CONCEPTS.keys())
+        concept_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
+        concept_probs = concept_weights / concept_weights.sum()
+        concepts = rng.choice(concept_names, size=n_cover_txns, p=concept_probs)
+
+        sender_ids_list.extend([mule_id] * n_cover_txns)
+        receiver_ids_list.extend(receivers)
+        amounts_list.extend(amounts)
+        timestamps_list.extend(timestamps)
+        concepts_list.extend(concepts)
+
+    cover_df = pd.DataFrame({
+        'sender_account_id': sender_ids_list,
+        'receiver_account_id': receiver_ids_list,
+        'amount': amounts_list,
+        'transaction_date': timestamps_list,
+        'concept_pago': concepts_list,
+    })
+
+    cover_df = cover_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
+        on='sender_account_id', how='left'
+    )
+
+    cover_df = cover_df.merge(
+        accounts_df[['account_id', 'clabe']].rename(
+            columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
+        on='receiver_account_id', how='left'
+    )
+
+    cover_df['status'] = 'Liquidada'
+    cover_df['is_fraud'] = False
+    cover_df['fraud_typology'] = None
+    cover_df['fraud_event_id'] = None
+    cover_df['transaction_id'] = -1
+
+    column_order = [
+        'transaction_id', 'sender_account_id', 'sender_clabe',
+        'receiver_account_id', 'receiver_clabe', 'amount',
+        'transaction_date', 'concept_pago', 'status',
+        'is_fraud', 'fraud_typology', 'fraud_event_id'
+    ]
+    cover_df = cover_df[column_order]
+
+    return cover_df
+
+
+
 
 def sample_fraud_amounts(n, regime_weights, rng):
     """ Sample fraud amounts with typology specific regime weights
@@ -440,20 +580,26 @@ def generate_smurfing(accounts_df, transactions_df, mule_pool, target_count, rng
     #amount sampling
     n_total_transactions = len(sender_ids_expanded)
 
-    mode_roll = rng.random(n_total_transactions)
-    is_threshold_mode = mode_roll < .8
+    modes = rng.choice(['threshold', 'below', 'noise'],
+                       size = n_total_transactions,
+                       p= SMURFING_AMOUNT_MODE_PROBS)
 
     amounts_float = np.empty(n_total_transactions)
 
-    n_threshold = is_threshold_mode.sum()
-    if n_threshold > 0:
+    threshold_mask = modes == 'threshold'
+    if threshold_mask.sum() > 0:
         low, high = SMURFING_THRESHOLD_RANGE
-        amounts_float[is_threshold_mode] = rng.uniform(low, high +1, size = n_threshold)
+        amounts_float[threshold_mask] = rng.uniform(low, high + 1, size = threshold_mask.sum())
 
-    n_mixed = (~is_threshold_mode).sum()
-    if n_mixed > 0:
+    below_mask = modes == 'below'
+    if below_mask.sum()>0:
         low, high = SMURFING_MIXED_RANGE
-        amounts_float[~is_threshold_mode] = rng.uniform(low, high +1, size = n_mixed)
+        amounts_float[below_mask] = rng.uniform(low, high + 1, size = below_mask.sum())
+
+    noise_mask = modes == 'noise'
+    if noise_mask.sum() > 0:
+        low, high = SMURFING_NOISE_RANGE
+        amounts_float[noise_mask] = rng.uniform(low, high +1, size = noise_mask.sum())
 
     amounts_rounded = np.round(amounts_float, 2)
     amounts = [Decimal(str(x)) for x in amounts_rounded]
@@ -611,6 +757,9 @@ def inject_fraud(transactions_df, accounts_df, seed = DEFAULT_SEED):
 
     mule_pools = select_mule_accounts(accounts_df, rng)
 
+    fresh_mule_ids, cover_mule_ids = split_mules_into_fresh_and_cover(mule_pools, rng)
+    all_mule_ids = fresh_mule_ids | cover_mule_ids
+
     app_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], target_app, rng)
 
     business_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], target_business ,rng)
@@ -621,6 +770,18 @@ def inject_fraud(transactions_df, accounts_df, seed = DEFAULT_SEED):
 
     mule_df = generate_mule_to_mule(mule_pools, accounts_df, target_mule ,rng)
 
+    mule_networks = build_mule_beneficiary_networks(cover_mule_ids, accounts_df, all_mule_ids, rng)
+
+    non_mule_pool = accounts_df[~accounts_df['account_id'].isin(all_mule_ids)]['account_id'].values
+
+    cover_df = generate_mule_cover_transactions(
+        cover_mule_ids,
+        accounts_df,
+        mule_networks,
+        non_mule_pool,
+        rng
+    )
+
     offset = 0
     for df in [app_df, business_df, ato_df, smurfing_df, mule_df]:
         df['fraud_event_id'] = df['fraud_event_id'] + offset
@@ -630,7 +791,7 @@ def inject_fraud(transactions_df, accounts_df, seed = DEFAULT_SEED):
 
     all_fraud_df['transaction_id'] = -1
 
-    final_df = pd.concat([transactions_df, all_fraud_df], ignore_index=True)
+    final_df = pd.concat([transactions_df, cover_df, all_fraud_df], ignore_index=True)
 
     final_df = final_df.sort_values('transaction_date').reset_index(drop=True)
 
@@ -648,7 +809,7 @@ def validate_fraud_injection(final_df, accounts_df):
 
     #fraud rate approx target
     fraud_rate = final_df['is_fraud'].mean()
-    assert .014 <= fraud_rate <= .016, 'fraud rate outside expected range'
+    assert .013 <= fraud_rate <= .016, 'fraud rate outside expected range'
 
     #valid fraud typologies
     valid_typologies = {'app_fraud', 'ato', 'mule_to_mule', 'smurfing', 'business_impersonation'}
