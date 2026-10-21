@@ -37,6 +37,25 @@ ATO_HOUR_MULTIPLIERS = {
     22: 3.0, 23: 3.0,
 }
 
+ATO_HOUR_WEIGHTS = {
+    0: 8.0, 1: 7.0, 2: 6.0, 3: 6.0, 4: 7.0, 5: 7.0,
+    22: 6.0, 23: 8.0,
+    6: 1.5, 7: 2.0, 8: 2.5, 9: 3.0, 10: 3.5, 11: 3.0,
+    12: 2.5, 13: 2.5, 14: 3.0, 15: 3.0, 16: 2.5,
+    17: 2.5, 18: 2.0, 19: 2.0, 20: 2.0, 21: 1.5,
+}
+
+ATO_SEGMENT_MULTIPLIERS = {
+    'dormant': 1.0,
+    'light': 1.0,
+    'regular': 1.0,
+    'heavy': 1.5,
+    'power': 2.0,
+}
+
+ATO_ESTABLISHED_PAIR_RATE = 0.22
+ATO_ESTABLISHED_PAIR_MIN_COUNT = 2
+
 BUSINESS_HOUR_MULTIPLIERS = {
     9: 1.3, 10: 1.3, 11: 1.3, 12: 1.3,
     13: 1.3, 14: 1.3, 15: 1.3, 16: 1.3, 17: 1.3,
@@ -58,6 +77,10 @@ APP_FRAUD_VOCAB = {
 
 APP_AMOUNT_WEIGHTS = {'medium_retail': 60, 'large':30, 'small_retail':10}
 
+APP_ESTABLISHED_PAIR_RATE = 0.17
+
+APP_ESTABLISHED_PAIR_MIN_COUNT = 5
+
 BUSINESS_AMOUNT_WEIGHTS = {'small_retail': 20, 'medium_retail': 55, 'large': 25}
 
 BUSINESS_IMPERSONATION_VOCAB = {
@@ -73,6 +96,9 @@ BUSINESS_IMPERSONATION_VOCAB = {
     "verificacion": 8,
     "": 10,
 }
+
+BUSINESS_ESTABLISHED_PAIR_RATE = 0.20
+BUSINESS_ESTABLISHED_PAIR_MIN_COUNT = 2
 
 ATO_MIN_VICTIM_AGE_DAYS = 365
 
@@ -99,6 +125,9 @@ SMURFING_RECEIVER_COUNT_PROBS = [0.60, 0.30, 0.10]
 SMURFING_TIMING_PROBS = [0.60, 0.30, 0.10]
 SMURFING_TIMING_WINDOWS_HOURS = [24, 72, 96]
 SMURFING_NOISE_RANGE = (15_000, 30_000)
+
+SMURFING_ESTABLISHED_PAIR_RATE = 0.35
+SMURFING_ESTABLISHED_PAIR_MIN_COUNT = 3
 
 MULE_AMOUNT_WEIGHTS = {
     'medium_retail': 40,
@@ -228,7 +257,9 @@ def generate_mule_cover_transactions(
         offset_seconds = rng.uniform(0, window_seconds, size=n_cover_txns)
         timestamps = sim_start + pd.to_timedelta(offset_seconds, unit='s')
 
-        amounts = sample_amounts(n_cover_txns, rng)
+        mule_tier = accounts_df.loc[accounts_df['account_id'] == mule_id, 'kyc_tier'].values[0]
+        mule_tiers = np.full(n_cover_txns, mule_tier)
+        amounts = sample_amounts(n_cover_txns, rng, sender_tiers=mule_tiers)
 
         concept_names = list(LEGITIMATE_CONCEPTS.keys())
         concept_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
@@ -304,7 +335,7 @@ def sample_fraud_amounts(n, regime_weights, rng):
 
     return amounts_decimal
 
-def sample_fraud_timestamps(n, hour_multipliers, rng):
+def sample_fraud_timestamps(n, hour_multipliers, rng, hour_weights_override = None):
     """Samples timestamps for fraud transactions with hour weight modifications for distinct typologies
     Return numpy array of timestamps
     """
@@ -328,9 +359,13 @@ def sample_fraud_timestamps(n, hour_multipliers, rng):
     sampled_dates = rng.choice(dates, size=n, p=date_probs)
 
     #hours
-    adjusted_hour_rates = np.array([HOUR_WEIGHTS[h] * hour_multipliers.get(h, 1.0) for h in range(24)])
+    if hour_weights_override is not None:
+        adjusted_hour_rates = np.array([hour_weights_override[h] for h in range(24)])
+    else:
+        adjusted_hour_rates = np.array([HOUR_WEIGHTS[h] * hour_multipliers.get(h, 1.0) for h in range(24)])
     hour_probs = adjusted_hour_rates / adjusted_hour_rates.sum()
     sampled_hours = rng.choice(24, size = n, p = hour_probs)
+
 
     #seconds/min
     sampled_minutes = rng.integers(0, 60, size=n)
@@ -341,25 +376,47 @@ def sample_fraud_timestamps(n, hour_multipliers, rng):
 
     return timestamps
 
-def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rng):
-    """Generate APP fraud transactions"""
+
+def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, pair_counts, rng):
+    """Generate APP fraud transactions.
+    """
+
+    # F1: split events into established-pair vs new-pair buckets
+    established_rate = APP_ESTABLISHED_PAIR_RATE  # 0.17
+    pair_min_count = APP_ESTABLISHED_PAIR_MIN_COUNT  # 5
+
+    n_to_sample = target_count
+    n_established = int(n_to_sample * established_rate)
+    n_new = n_to_sample - n_established
 
     sender_counts = transactions_df.groupby('sender_account_id').size()
     qualifying_senders = sender_counts[sender_counts >= 10].index
 
-    n_to_sample = min(target_count, len(qualifying_senders))
-    victim_ids = rng.choice(qualifying_senders, size = n_to_sample, replace = False)
+    n_new_actual = min(n_new, len(qualifying_senders))
+    new_victim_ids = rng.choice(qualifying_senders, size=n_new_actual, replace=False)
+    new_receiver_ids = rng.choice(mule_pool, size=n_new_actual)
 
-    #mule receiver
-    receiver_ids = rng.choice(mule_pool, size = n_to_sample)
+    app_pairs_pool = pair_counts[pair_counts['pair_txn_count'] >= pair_min_count]
 
-    app_amounts = sample_fraud_amounts(n_to_sample, APP_AMOUNT_WEIGHTS, rng)
+    n_established_actual = min(n_established, len(app_pairs_pool))
 
-    #no hour skew
-    timestamps = sample_fraud_timestamps(n_to_sample, {}, rng)
+    if n_established_actual > 0:
+        sampled_pairs = app_pairs_pool.sample(n=n_established_actual, random_state=rng.integers(0, 2 ** 31))
+        established_victim_ids = sampled_pairs['sender_account_id'].values
+        established_receiver_ids = sampled_pairs['receiver_account_id'].values
+    else:
+        established_victim_ids = np.array([], dtype=int)
+        established_receiver_ids = np.array([], dtype=int)
 
-    #concepto_pago 60% fraud-like 40% legit
-    app_vocab_use = rng.random(n_to_sample) < .6
+    victim_ids = np.concatenate([new_victim_ids, established_victim_ids])
+    receiver_ids = np.concatenate([new_receiver_ids, established_receiver_ids])
+    actual_total = len(victim_ids)
+
+    app_amounts = sample_fraud_amounts(actual_total, APP_AMOUNT_WEIGHTS, rng)
+
+    timestamps = sample_fraud_timestamps(actual_total, {}, rng)
+
+    app_vocab_use = rng.random(actual_total) < .6
     app_vocab_names = list(APP_FRAUD_VOCAB.keys())
     app_vocab_weights = np.array(list(APP_FRAUD_VOCAB.values()))
 
@@ -372,9 +429,9 @@ def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rn
     legit_probs = legit_weights / legit_weights.sum()
 
     n_legit_concepts = (~app_vocab_use).sum()
-    assign_legit_concepts = rng.choice(legit_names, p = legit_probs,size = n_legit_concepts)
+    assign_legit_concepts = rng.choice(legit_names, p=legit_probs, size=n_legit_concepts)
 
-    concepts = np.empty(n_to_sample, dtype = object)
+    concepts = np.empty(actual_total, dtype=object)
     concepts[app_vocab_use] = assign_fraud_concept
     concepts[~app_vocab_use] = assign_legit_concepts
 
@@ -384,21 +441,21 @@ def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rn
         "amount": app_amounts,
         "transaction_date": timestamps,
         "concept_pago": concepts,
-        "is_fraud" : True,
+        "is_fraud": True,
         "fraud_typology": 'app_fraud',
-        "status" : "Liquidada",
-        "fraud_event_id" : None
+        "status": "Liquidada",
+        "fraud_event_id": None
     })
 
     fraud_df = fraud_df.merge(
         accounts_df[['account_id', 'clabe']].rename(
-        columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
+            columns={'account_id': 'sender_account_id', 'clabe': 'sender_clabe'}),
         on='sender_account_id',
         how='left'
     )
     fraud_df = fraud_df.merge(
         accounts_df[['account_id', 'clabe']].rename(
-        columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
+            columns={'account_id': 'receiver_account_id', 'clabe': 'receiver_clabe'}),
         on='receiver_account_id',
         how='left'
     )
@@ -406,37 +463,57 @@ def generate_app_fraud(accounts_df, transactions_df, mule_pool, target_count, rn
     return fraud_df
 
 
-def generate_business_impersonation(accounts_df, transactions_df, mule_pool, target_count, rng):
-    """ Generate business impersonation fraud transactions"""
+def generate_business_impersonation(accounts_df, transactions_df, mule_pool, target_count, pair_counts, rng):
+    """Generate business impersonation fraud transactions"""
+
+    established_rate = BUSINESS_ESTABLISHED_PAIR_RATE  # 0.20
+    pair_min_count = BUSINESS_ESTABLISHED_PAIR_MIN_COUNT  # 2
+
+    n_to_sample = target_count
+    n_established = int(n_to_sample * established_rate)
+    n_new = n_to_sample - n_established
 
     sender_counts = transactions_df.groupby('sender_account_id').size()
     qualifying_senders = sender_counts[sender_counts >= 10].index
 
-    n_to_sample = min(target_count, len(qualifying_senders))
-    victim_ids = rng.choice(qualifying_senders, size=n_to_sample, replace=False)
+    n_new_actual = min(n_new, len(qualifying_senders))
+    new_victim_ids = rng.choice(qualifying_senders, size=n_new_actual, replace=False)
+    new_receiver_ids = rng.choice(mule_pool, size=n_new_actual)
 
-    receiver_ids = rng.choice(mule_pool, size=n_to_sample)
+    biz_pairs_pool = pair_counts[pair_counts['pair_txn_count'] >= pair_min_count]
+    n_established_actual = min(n_established, len(biz_pairs_pool))
 
-    biz_amounts = sample_fraud_amounts(n_to_sample, BUSINESS_AMOUNT_WEIGHTS, rng)
+    if n_established_actual > 0:
+        sampled_pairs = biz_pairs_pool.sample(n=n_established_actual, random_state=rng.integers(0, 2 ** 31))
+        established_victim_ids = sampled_pairs['sender_account_id'].values
+        established_receiver_ids = sampled_pairs['receiver_account_id'].values
+    else:
+        established_victim_ids = np.array([], dtype=int)
+        established_receiver_ids = np.array([], dtype=int)
 
-    timestamps = sample_fraud_timestamps(n_to_sample, BUSINESS_HOUR_MULTIPLIERS, rng)
+    victim_ids = np.concatenate([new_victim_ids, established_victim_ids])
+    receiver_ids = np.concatenate([new_receiver_ids, established_receiver_ids])
+    actual_total = len(victim_ids)
 
-    biz_vocab_use = rng.random(n_to_sample) < .8
+    biz_amounts = sample_fraud_amounts(actual_total, BUSINESS_AMOUNT_WEIGHTS, rng)
+    timestamps = sample_fraud_timestamps(actual_total, BUSINESS_HOUR_MULTIPLIERS, rng)
+
+    biz_vocab_use = rng.random(actual_total) < .8
     biz_vocab_names = list(BUSINESS_IMPERSONATION_VOCAB.keys())
     biz_vocab_weights = np.array(list(BUSINESS_IMPERSONATION_VOCAB.values()))
     biz_probs = biz_vocab_weights / biz_vocab_weights.sum()
 
     n_biz_concepts = biz_vocab_use.sum()
-    assigned_biz_concepts = rng.choice(biz_vocab_names, size = n_biz_concepts, p = biz_probs)
+    assigned_biz_concepts = rng.choice(biz_vocab_names, size=n_biz_concepts, p=biz_probs)
 
     legit_names = list(LEGITIMATE_CONCEPTS.keys())
     legit_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
     legit_probs = legit_weights / legit_weights.sum()
 
     n_legit_concepts = (~biz_vocab_use).sum()
-    assigned_legit_concepts = rng.choice(legit_names, size = n_legit_concepts, p = legit_probs)
+    assigned_legit_concepts = rng.choice(legit_names, size=n_legit_concepts, p=legit_probs)
 
-    concepts = np.empty(n_to_sample, dtype = object)
+    concepts = np.empty(actual_total, dtype=object)
     concepts[biz_vocab_use] = assigned_biz_concepts
     concepts[~biz_vocab_use] = assigned_legit_concepts
 
@@ -468,10 +545,17 @@ def generate_business_impersonation(accounts_df, transactions_df, mule_pool, tar
     return fraud_df
 
 
-def generate_ato(accounts_df, transactions_df, mule_pool, target_count, rng):
+def generate_ato(accounts_df, transactions_df, mule_pool, target_count, pair_counts, rng):
     """Generate ATO fraud transactions"""
 
-    one_year_ago = pd.Timestamp(SIMULATION_START - timedelta(days = ATO_MIN_VICTIM_AGE_DAYS))
+    established_rate = ATO_ESTABLISHED_PAIR_RATE  # 0.22
+    pair_min_count = ATO_ESTABLISHED_PAIR_MIN_COUNT  # 2
+
+    n_events = int(target_count / 1.35)
+    n_established_events = int(n_events * established_rate)
+    n_new_events = n_events - n_established_events
+
+    one_year_ago = pd.Timestamp(SIMULATION_START - timedelta(days=ATO_MIN_VICTIM_AGE_DAYS))
     established_ids = accounts_df[accounts_df['creation_date'] <= one_year_ago]
 
     sender_count = transactions_df.groupby('sender_account_id').size()
@@ -479,42 +563,71 @@ def generate_ato(accounts_df, transactions_df, mule_pool, target_count, rng):
 
     qualifying_victims = established_ids[established_ids['account_id'].isin(active_senders)]['account_id']
 
-    n_events = int(target_count / 1.35)
-    n_to_sample = min(n_events, len(qualifying_victims))
-    victim_ids = rng.choice(qualifying_victims.values, size = n_to_sample, replace=False)
+    n_new_actual = min(n_new_events, len(qualifying_victims))
+    new_victim_ids = rng.choice(qualifying_victims.values, size=n_new_actual, replace=False)
 
-    n_transactions_per_event = rng.choice([1, 2, 3], size = n_to_sample, p = ATO_TRANSACTIONS_PER_EVENT_PROBS)
+    ato_pairs_pool = pair_counts[pair_counts['pair_txn_count'] >= pair_min_count]
+    n_established_actual = min(n_established_events, len(ato_pairs_pool))
 
-    sender_ids_expanded = np.repeat(victim_ids, n_transactions_per_event)
-    event_ids_expanded = np.repeat(np.arange(n_to_sample), n_transactions_per_event)
+    if n_established_actual > 0:
+        sampled_pairs = ato_pairs_pool.sample(n=n_established_actual, random_state=rng.integers(0, 2 ** 31))
+        established_victim_ids = sampled_pairs['sender_account_id'].values
+        established_event_receivers = sampled_pairs['receiver_account_id'].values
+    else:
+        established_victim_ids = np.array([], dtype=int)
+        established_event_receivers = np.array([], dtype=int)
 
+    all_victim_ids = np.concatenate([new_victim_ids, established_victim_ids])
+    is_established = np.concatenate([
+        np.zeros(len(new_victim_ids), dtype=bool),
+        np.ones(len(established_victim_ids), dtype=bool)
+    ])
+    actual_total_events = len(all_victim_ids)
+
+    n_transactions_per_event = rng.choice([1, 2, 3], size=actual_total_events, p=ATO_TRANSACTIONS_PER_EVENT_PROBS)
+    sender_ids_expanded = np.repeat(all_victim_ids, n_transactions_per_event)
+    event_ids_expanded = np.repeat(np.arange(actual_total_events), n_transactions_per_event)
+    is_established_expanded = np.repeat(is_established, n_transactions_per_event)
     n_total_transactions = len(sender_ids_expanded)
-    receiver_ids = rng.choice(mule_pool, size = n_total_transactions)
+
+    receiver_ids = np.empty(n_total_transactions, dtype=int)
+
+    new_mask = ~is_established_expanded
+    receiver_ids[new_mask] = rng.choice(mule_pool, size=new_mask.sum())
+
+    for event_idx in range(len(new_victim_ids), actual_total_events):
+        event_mask = event_ids_expanded == event_idx
+        established_event_idx = event_idx - len(new_victim_ids)
+        receiver_ids[event_mask] = established_event_receivers[established_event_idx]
 
     ato_amounts = sample_fraud_amounts(n_total_transactions, ATO_AMOUNT_WEIGHTS, rng)
 
-    timestamps = sample_fraud_timestamps(n_total_transactions, ATO_HOUR_MULTIPLIERS, rng)
+    segment_map = accounts_df.set_index('account_id')['activity_segment'].to_dict()
+    sender_segments = [segment_map[s] for s in sender_ids_expanded]
+    multipliers = np.array([ATO_SEGMENT_MULTIPLIERS[seg] for seg in sender_segments])
+    ato_amounts = [Decimal(str(round(float(a) * m, 2))) for a, m in zip(ato_amounts, multipliers)]
 
+    timestamps = sample_fraud_timestamps(n_total_transactions, {}, rng, hour_weights_override=ATO_HOUR_WEIGHTS)
 
     roll = rng.random(n_total_transactions)
     generic = (roll >= .8) & (roll < .95)
     fraud = roll >= .95
 
-    concepts = np.full(n_total_transactions, "", dtype = object)
+    concepts = np.full(n_total_transactions, "", dtype=object)
 
     n_generic = generic.sum()
     if n_generic > 0:
         generic_names = list(ATO_GENERIC_CONCEPTS.keys())
         generic_weights = np.array(list(ATO_GENERIC_CONCEPTS.values()))
         generic_probs = generic_weights / generic_weights.sum()
-        concepts[generic] = rng.choice(generic_names, size = n_generic, p = generic_probs)
+        concepts[generic] = rng.choice(generic_names, size=n_generic, p=generic_probs)
 
     n_fraud = fraud.sum()
     if n_fraud > 0:
         fraud_names = list(APP_FRAUD_VOCAB.keys())
         fraud_weights = np.array(list(APP_FRAUD_VOCAB.values()))
-        fraud_probs = fraud_weights/ fraud_weights.sum()
-        concepts[fraud] = rng.choice(fraud_names, size = n_fraud, p = fraud_probs)
+        fraud_probs = fraud_weights / fraud_weights.sum()
+        concepts[fraud] = rng.choice(fraud_names, size=n_fraud, p=fraud_probs)
 
     fraud_df = pd.DataFrame({
         "sender_account_id": sender_ids_expanded,
@@ -527,8 +640,6 @@ def generate_ato(accounts_df, transactions_df, mule_pool, target_count, rng):
         "status": "Liquidada",
         "fraud_event_id": event_ids_expanded
     })
-
-
 
     fraud_df = fraud_df.merge(
         accounts_df[['account_id', 'clabe']].rename(
@@ -545,106 +656,131 @@ def generate_ato(accounts_df, transactions_df, mule_pool, target_count, rng):
 
     return fraud_df
 
-def generate_smurfing(accounts_df, transactions_df, mule_pool, target_count, rng):
+
+def generate_smurfing(accounts_df, transactions_df, mule_pool, target_count, pair_counts, rng):
     """Generate smurfing fraud transactions"""
+
+    established_rate = SMURFING_ESTABLISHED_PAIR_RATE  # 0.35
+    pair_min_count = SMURFING_ESTABLISHED_PAIR_MIN_COUNT  # 3
 
     sender_counts = transactions_df.groupby('sender_account_id').size()
     active_senders = sender_counts[sender_counts >= 15].index
 
-    n_events = int(target_count / 6) # 6 = avg event size
-    n_to_sample = min(n_events, len(active_senders))
+    n_events = int(target_count / 6)
+    n_established_events = int(n_events * established_rate)
+    n_new_events = n_events - n_established_events
 
-    perpetrator_ids = rng.choice(active_senders, size = n_to_sample, replace = False)
+    n_new_actual = min(n_new_events, len(active_senders))
+    new_perpetrator_ids = rng.choice(active_senders, size=n_new_actual, replace=False)
+
+    smurfing_pairs_pool = pair_counts[pair_counts['pair_txn_count'] >= pair_min_count]
+    n_established_actual = min(n_established_events, len(smurfing_pairs_pool))
+
+    if n_established_actual > 0:
+        sampled_pairs = smurfing_pairs_pool.sample(n=n_established_actual, random_state=rng.integers(0, 2 ** 31))
+        established_perpetrator_ids = sampled_pairs['sender_account_id'].values
+        established_event_receivers = sampled_pairs['receiver_account_id'].values
+    else:
+        established_perpetrator_ids = np.array([], dtype=int)
+        established_event_receivers = np.array([], dtype=int)
+
+    all_perpetrator_ids = np.concatenate([new_perpetrator_ids, established_perpetrator_ids])
+    is_established = np.concatenate([
+        np.zeros(len(new_perpetrator_ids), dtype=bool),
+        np.ones(len(established_perpetrator_ids), dtype=bool)
+    ])
+    actual_total_events = len(all_perpetrator_ids)
 
     min_size, max_size = SMURFING_EVENT_SIZE_RANGE
-    event_sizes = rng.integers(min_size, max_size + 1, size = n_to_sample)
+    event_sizes = rng.integers(min_size, max_size + 1, size=actual_total_events)
 
-    sender_ids_expanded = np.repeat(perpetrator_ids, event_sizes)
-    event_ids = np.repeat(np.arange(n_to_sample), event_sizes)
+    sender_ids_expanded = np.repeat(all_perpetrator_ids, event_sizes)
+    event_ids = np.repeat(np.arange(actual_total_events), event_sizes)
+    is_established_expanded = np.repeat(is_established, event_sizes)
 
-    receivers_per_event = rng.choice([1, 2, 3], size= n_to_sample, p = SMURFING_RECEIVER_COUNT_PROBS)
+    receivers_per_event = rng.choice([1, 2, 3], size=actual_total_events, p=SMURFING_RECEIVER_COUNT_PROBS)
 
-    #multi-receiver assignments per event
     receiver_lists = []
-    for i in range(n_events):
-        n_receivers = receivers_per_event[i]
+    for i in range(actual_total_events):
         n_transactions_this_event = event_sizes[i]
 
-        event_receivers = rng.choice(mule_pool, size = n_receivers, replace = False)
+        if is_established[i]:
+            established_event_idx = i - len(new_perpetrator_ids)
+            single_receiver = established_event_receivers[established_event_idx]
+            txn_receivers = np.full(n_transactions_this_event, single_receiver)
+        else:
+            n_receivers = receivers_per_event[i]
+            event_receivers = rng.choice(mule_pool, size=n_receivers, replace=False)
+            txn_receivers = rng.choice(event_receivers, size=n_transactions_this_event)
 
-        txn_receivers = rng.choice(event_receivers, size = n_transactions_this_event)
         receiver_lists.append(txn_receivers)
 
     receiver_ids = np.concatenate(receiver_lists)
 
-    #amount sampling
     n_total_transactions = len(sender_ids_expanded)
 
     modes = rng.choice(['threshold', 'below', 'noise'],
-                       size = n_total_transactions,
-                       p= SMURFING_AMOUNT_MODE_PROBS)
+                       size=n_total_transactions,
+                       p=SMURFING_AMOUNT_MODE_PROBS)
 
     amounts_float = np.empty(n_total_transactions)
 
     threshold_mask = modes == 'threshold'
     if threshold_mask.sum() > 0:
         low, high = SMURFING_THRESHOLD_RANGE
-        amounts_float[threshold_mask] = rng.uniform(low, high + 1, size = threshold_mask.sum())
+        amounts_float[threshold_mask] = rng.uniform(low, high + 1, size=threshold_mask.sum())
 
     below_mask = modes == 'below'
-    if below_mask.sum()>0:
+    if below_mask.sum() > 0:
         low, high = SMURFING_MIXED_RANGE
-        amounts_float[below_mask] = rng.uniform(low, high + 1, size = below_mask.sum())
+        amounts_float[below_mask] = rng.uniform(low, high + 1, size=below_mask.sum())
 
     noise_mask = modes == 'noise'
     if noise_mask.sum() > 0:
         low, high = SMURFING_NOISE_RANGE
-        amounts_float[noise_mask] = rng.uniform(low, high +1, size = noise_mask.sum())
+        amounts_float[noise_mask] = rng.uniform(low, high + 1, size=noise_mask.sum())
 
     amounts_rounded = np.round(amounts_float, 2)
     amounts = [Decimal(str(x)) for x in amounts_rounded]
 
-    #transactions burst timing
-    window_hours_per_event = rng.choice(SMURFING_TIMING_WINDOWS_HOURS, size = n_to_sample, p = SMURFING_TIMING_PROBS)
+    window_hours_per_event = rng.choice(SMURFING_TIMING_WINDOWS_HOURS, size=actual_total_events,
+                                        p=SMURFING_TIMING_PROBS)
 
     sim_start_ts = pd.Timestamp(SIMULATION_START)
     sim_end_ts = pd.Timestamp(SIMULATION_END) + pd.Timedelta(days=1)
 
     sim_end_seconds = (sim_end_ts - sim_start_ts).total_seconds()
-    window_seconds_per_event = window_hours_per_event *3600
+    window_seconds_per_event = window_hours_per_event * 3600
 
     latest_start_per_event = sim_end_seconds - window_seconds_per_event
-
-    burst_start = rng.uniform(0, latest_start_per_event, size = n_to_sample)
+    burst_start = rng.uniform(0, latest_start_per_event, size=actual_total_events)
 
     burst_start_expanded = np.repeat(burst_start, event_sizes)
     window_expanded = np.repeat(window_seconds_per_event, event_sizes)
 
-    offset_seconds = rng.uniform(0, window_expanded, size = n_total_transactions)
-
+    offset_seconds = rng.uniform(0, window_expanded, size=n_total_transactions)
     timestamps_seconds = burst_start_expanded + offset_seconds
-
-    timestamps = sim_start_ts + pd.to_timedelta(timestamps_seconds, unit = 's')
+    timestamps = sim_start_ts + pd.to_timedelta(timestamps_seconds, unit='s')
 
     roll = rng.random(n_total_transactions)
     is_generic = (roll >= .6) & (roll < .9)
     is_varied = roll >= .9
 
-    concepts = np.full(n_total_transactions, "", dtype = object)
+    concepts = np.full(n_total_transactions, "", dtype=object)
 
     n_generic = is_generic.sum()
     if n_generic > 0:
         generic_names = list(ATO_GENERIC_CONCEPTS.keys())
         generic_weights = np.array(list(ATO_GENERIC_CONCEPTS.values()))
         generic_probs = generic_weights / generic_weights.sum()
-        concepts[is_generic] = rng.choice(generic_names, size = n_generic, p = generic_probs)
+        concepts[is_generic] = rng.choice(generic_names, size=n_generic, p=generic_probs)
 
     n_varied = is_varied.sum()
     if n_varied > 0:
         varied_names = list(LEGITIMATE_CONCEPTS.keys())
         varied_weights = np.array(list(LEGITIMATE_CONCEPTS.values()))
         varied_probs = varied_weights / varied_weights.sum()
-        concepts[is_varied] = rng.choice(varied_names, size = n_varied, p = varied_probs)
+        concepts[is_varied] = rng.choice(varied_names, size=n_varied, p=varied_probs)
 
     fraud_df = pd.DataFrame({
         "sender_account_id": sender_ids_expanded,
@@ -760,13 +896,17 @@ def inject_fraud(transactions_df, accounts_df, seed = DEFAULT_SEED):
     fresh_mule_ids, cover_mule_ids = split_mules_into_fresh_and_cover(mule_pools, rng)
     all_mule_ids = fresh_mule_ids | cover_mule_ids
 
-    app_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], target_app, rng)
+    pair_counts = transactions_df.groupby(
+        ['sender_account_id', 'receiver_account_id']
+    ).size().reset_index(name='pair_txn_count')
 
-    business_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], target_business ,rng)
+    app_df = generate_app_fraud(accounts_df, transactions_df, mule_pools['app'], target_app, pair_counts, rng)
 
-    ato_df = generate_ato(accounts_df, transactions_df, mule_pools['ato'], target_ato, rng)
+    business_df = generate_business_impersonation(accounts_df, transactions_df, mule_pools['business'], target_business, pair_counts, rng)
 
-    smurfing_df = generate_smurfing(accounts_df, transactions_df, mule_pools['shared'], target_smurfing, rng)
+    ato_df = generate_ato(accounts_df, transactions_df, mule_pools['ato'], target_ato, pair_counts, rng)
+
+    smurfing_df = generate_smurfing(accounts_df, transactions_df, mule_pools['shared'], target_smurfing, pair_counts, rng)
 
     mule_df = generate_mule_to_mule(mule_pools, accounts_df, target_mule ,rng)
 

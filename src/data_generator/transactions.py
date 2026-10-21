@@ -30,6 +30,13 @@ AMOUNT_REGIMES = {
     'high_value':    {'weight': 2,  'mu': 12.7, 'sigma': 1.2},
 }
 
+TIER_AMOUNT_WEIGHTS = {
+    1: {'micro': 40, 'small_retail': 50, 'medium_retail': 10},
+    2: {'small_retail': 25, 'medium_retail': 55, 'large': 20},
+    3: {'medium_retail': 25, 'large': 45, 'high_value': 30},
+    4: {'small_retail': 20, 'medium_retail': 40, 'large': 25, 'high_value': 15},
+}
+
 DAY_OF_WEEK_WEIGHTS = {
     0: 5,
     1: 5,
@@ -140,7 +147,9 @@ def generate_transactions(accounts_df, seed = DEFAULT_SEED):
     receiver_ids = assign_transaction_receiver(sender_ids, beneficiary_networks, accounts_df, rng)
 
     #amounts
-    amounts = sample_amounts(len(sender_ids), rng)
+    sender_tier_map = accounts_df.set_index('account_id')['kyc_tier'].to_dict()
+    sender_tiers = np.array([sender_tier_map[aid] for aid in sender_ids])
+    amounts = sample_amounts(len(sender_ids), rng, sender_tiers = sender_tiers)
 
     #timestamps
     timestamps = sample_timestamps(len(sender_ids), rng)
@@ -307,16 +316,30 @@ def assign_transaction_receiver(sender_ids, beneficiary_networks, accounts_df, r
 
 #sampling transactions to amount regimes
 
-def sample_amounts(n_transactions, rng):
+def sample_amounts(n_transactions, rng, sender_tiers = None):
     """
     Sample transaction amounts according to the lognormal distribution across the 5 different regimes.
 
     Returns list of amounts, corresponding to number of transactions.
     """
-    regime_names = list(AMOUNT_REGIMES.keys())
-    regime_weights = np.array([regime['weight'] for regime in AMOUNT_REGIMES.values()])
-    regime_probs = regime_weights / regime_weights.sum()
-    assigned_regimes = rng.choice(regime_names, p = regime_probs, size = n_transactions)
+
+    assigned_regimes = np.empty(n_transactions, dtype = object)
+
+    if sender_tiers is None:
+        regime_names = list(AMOUNT_REGIMES.keys())
+        regime_weights = np.array([regime['weight'] for regime in AMOUNT_REGIMES.values()])
+        regime_probs = regime_weights / regime_weights.sum()
+        assigned_regimes = rng.choice(regime_names, p = regime_probs, size = n_transactions)
+    else:
+        for tier in [1, 2, 3, 4]:
+            tier_mask = sender_tiers == tier
+            n_in_tier = tier_mask.sum()
+            if n_in_tier > 0:
+                tier_weights = TIER_AMOUNT_WEIGHTS[tier]
+                regime_names = list(tier_weights.keys())
+                regime_weights = np.array(list(tier_weights.values()))
+                regime_probs = regime_weights / regime_weights.sum()
+                assigned_regimes[tier_mask] = rng.choice(regime_names, p = regime_probs, size = n_in_tier)
 
     amounts = np.empty(n_transactions)
     for regime_name, params in AMOUNT_REGIMES.items():
