@@ -1,6 +1,7 @@
 import logging
 import pandas as pd
 from pyathena import connect
+from pyathena.pandas.cursor import PandasCursor
 
 from src.features.config import (
     AWS_PROFILE,
@@ -24,6 +25,7 @@ def _get_athena_connection():
         region_name=AWS_REGION,
         s3_staging_dir=S3_STAGING_DIR,
         work_group = ATHENA_WORKGROUP,
+        cursor_class=PandasCursor
     )
 
 def load_fct_features(refresh: bool = False) -> pd.DataFrame:
@@ -36,7 +38,9 @@ def load_fct_features(refresh: bool = False) -> pd.DataFrame:
     query = f"SELECT * FROM {DBT_SCHEMA}.{FCT_TABLE}"
     connection = _get_athena_connection()
     try:
-        df = pd.read_sql(query, connection)
+        cursor = connection.cursor()
+        cursor.execute(query)
+        df = cursor.as_pandas()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         df.to_parquet(FCT_CACHE_PATH, index = False)
         return df
@@ -53,7 +57,9 @@ def load_dim_accounts(refresh: bool = False) -> pd.DataFrame:
     query = f'SELECT * FROM {DBT_SCHEMA}.{DIM_TABLE}'
     connection = _get_athena_connection()
     try:
-        df = pd.read_sql(query, connection)
+        cursor = connection.cursor()
+        cursor.execute(query)
+        df = cursor.as_pandas()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         df.to_parquet(DIM_CACHE_PATH, index = False)
         return df
@@ -72,7 +78,9 @@ def load_fraud_typology(refresh: bool = False) -> pd.DataFrame:
     query = f'SELECT transaction_id, fraud_typology FROM {DBT_SCHEMA}.stg_transactions WHERE is_fraud = true'
     connection = _get_athena_connection()
     try:
-        df = pd.read_sql(query, connection)
+        cursor = connection.cursor()
+        cursor.execute(query)
+        df = cursor.as_pandas()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         df.to_parquet(cache_path, index = False)
         return df
