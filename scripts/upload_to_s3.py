@@ -12,7 +12,7 @@ REGION = 'us-east-1'
 
 def upload_to_s3():
     logger.info('Starting SPEI data generation')
-    accounts_df = generate_accounts(10_000)
+    accounts_df = generate_accounts(50_000)
     transactions_df = generate_transactions(accounts_df)
     final_df = inject_fraud(transactions_df, accounts_df)
 
