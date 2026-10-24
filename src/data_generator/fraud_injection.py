@@ -45,15 +45,15 @@ ATO_HOUR_WEIGHTS = {
     17: 2.5, 18: 2.0, 19: 2.0, 20: 2.0, 21: 1.5,
 }
 
-ATO_SEGMENT_MULTIPLIERS = {
-    'dormant': 1.0,
-    'light': 1.0,
-    'regular': 1.0,
-    'heavy': 1.5,
-    'power': 2.0,
+ATO_AMOUNT_WEIGHTS_BY_SEGMENT = {
+    'dormant': {'small_retail': 50, 'medium_retail': 40, 'large': 10},
+    'light':   {'small_retail': 40, 'medium_retail': 45, 'large': 15},
+    'regular': {'small_retail': 20, 'medium_retail': 50, 'large': 25, 'high_value': 5},
+    'heavy':   {'medium_retail': 25, 'large': 50, 'high_value': 25},
+    'power':   {'medium_retail': 15, 'large': 40, 'high_value': 45},
 }
 
-ATO_ESTABLISHED_PAIR_RATE = 0.22
+ATO_ESTABLISHED_PAIR_RATE = 0.05
 ATO_ESTABLISHED_PAIR_MIN_COUNT = 2
 
 BUSINESS_HOUR_MULTIPLIERS = {
@@ -77,7 +77,7 @@ APP_FRAUD_VOCAB = {
 
 APP_AMOUNT_WEIGHTS = {'medium_retail': 60, 'large':30, 'small_retail':10}
 
-APP_ESTABLISHED_PAIR_RATE = 0.17
+APP_ESTABLISHED_PAIR_RATE = 0.05
 
 APP_ESTABLISHED_PAIR_MIN_COUNT = 5
 
@@ -97,12 +97,11 @@ BUSINESS_IMPERSONATION_VOCAB = {
     "": 10,
 }
 
-BUSINESS_ESTABLISHED_PAIR_RATE = 0.20
+BUSINESS_ESTABLISHED_PAIR_RATE = 0.07
 BUSINESS_ESTABLISHED_PAIR_MIN_COUNT = 2
 
 ATO_MIN_VICTIM_AGE_DAYS = 365
 
-ATO_AMOUNT_WEIGHTS = {'large': 50, 'medium_retail': 40, 'high_value': 10}
 
 ATO_TRANSACTIONS_PER_EVENT_PROBS = [.7, .25, .05]
 
@@ -126,7 +125,7 @@ SMURFING_TIMING_PROBS = [0.60, 0.30, 0.10]
 SMURFING_TIMING_WINDOWS_HOURS = [24, 72, 96]
 SMURFING_NOISE_RANGE = (15_000, 30_000)
 
-SMURFING_ESTABLISHED_PAIR_RATE = 0.35
+SMURFING_ESTABLISHED_PAIR_RATE = 0.2
 SMURFING_ESTABLISHED_PAIR_MIN_COUNT = 3
 
 MULE_AMOUNT_WEIGHTS = {
@@ -600,12 +599,18 @@ def generate_ato(accounts_df, transactions_df, mule_pool, target_count, pair_cou
         established_event_idx = event_idx - len(new_victim_ids)
         receiver_ids[event_mask] = established_event_receivers[established_event_idx]
 
-    ato_amounts = sample_fraud_amounts(n_total_transactions, ATO_AMOUNT_WEIGHTS, rng)
-
     segment_map = accounts_df.set_index('account_id')['activity_segment'].to_dict()
-    sender_segments = [segment_map[s] for s in sender_ids_expanded]
-    multipliers = np.array([ATO_SEGMENT_MULTIPLIERS[seg] for seg in sender_segments])
-    ato_amounts = [Decimal(str(round(float(a) * m, 2))) for a, m in zip(ato_amounts, multipliers)]
+    sender_segments = np.array([segment_map[s] for s in sender_ids_expanded])
+
+    ato_amounts = np.empty(n_total_transactions, dtype=object)
+    for segment, weights in ATO_AMOUNT_WEIGHTS_BY_SEGMENT.items():
+        segment_mask = sender_segments == segment
+        n_in_segment = segment_mask.sum()
+        if n_in_segment > 0:
+            segment_amounts = sample_fraud_amounts(n_in_segment, weights, rng)
+            ato_amounts[segment_mask] = segment_amounts
+
+    ato_amounts = list(ato_amounts)
 
     timestamps = sample_fraud_timestamps(n_total_transactions, {}, rng, hour_weights_override=ATO_HOUR_WEIGHTS)
 
