@@ -42,6 +42,16 @@ def load_fct_features(refresh: bool = False) -> pd.DataFrame:
         cursor.execute(query)
         df = cursor.as_pandas()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        amount_cols = [
+            'amount',
+            'amount_vs_sender_avg',
+            'sender_amount_sum_24h',
+            'sender_amount_avg_24h',
+            'sender_amount_max_7d',
+            'receiver_amount_max_7d',
+        ]
+        for col in amount_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
         df.to_parquet(FCT_CACHE_PATH, index = False)
         return df
     finally:
